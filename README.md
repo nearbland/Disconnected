@@ -1,4 +1,4 @@
-# DISCONNECTED
+# DISCONNECTED (alpha 0.1.0)
 
 > A modern, standalone, single-file falling-block web game featuring a time-stop "Focus" mechanic. Built with zero dependencies.
 > Disconnected has no affiliation with Tetris.
