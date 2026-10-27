@@ -43,7 +43,7 @@
   - Pure `#000000` OLED dark mode .
   - Dynamic 50%–500% UI and matrix scaling.
 
-- **Built-in Easter Eggs**: Matrix terminal sequence, an 8-bit chiptune performance, and a high-gravity "NOZEN" speed challenge.
+- **Built-in Easter Eggs**: Poke around with the Escape key, the title logo or the zen button and find out ;)
 
 ---
 
