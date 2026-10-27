@@ -1,0 +1,5710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>DISCONNECTED</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #04040a; overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  body.oled-mode {
+    background: #000000;
+  }
+  #wrap {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas {
+    display: block;
+    touch-action: none;
+    box-shadow: 0 0 80px rgba(60,120,255,0.12);
+  }
+  body.oled-mode canvas {
+    box-shadow: none;
+  }
+  body.bw-mode {
+    background: #000000;
+  }
+  body.bw-mode canvas {
+    box-shadow: none;
+  }
+  #hidden-name-input {
+    position: fixed;
+    left: -9999px;
+    top: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="960" height="720"></canvas></div>
+<input id="hidden-name-input" type="text" maxlength="7" autocomplete="off" spellcheck="false" />
+<script>
+(() => {
+'use strict';
+
+/* =========================================================
+   SETUP & DYNAMIC LAYOUT / 4K HIDPI & APP SCALING
+   ========================================================= */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const hiddenInput = document.getElementById('hidden-name-input');
+let W = 960, H = 720;
+
+const MAX_NAME_LEN = 7;
+const COLS = 10, ROWS = 20, BUFFER = 4;
+let CELL = 30;
+let BOARD_W = COLS * CELL, BOARD_H = ROWS * CELL;
+let BOARD_X = (W - BOARD_W) / 2;
+let BOARD_Y = (H - BOARD_H) / 2 + 18;
+let isPortrait = false;
+let dpr = 1;
+let renderScale = 1;
+
+/* =========================================================
+   COLOR PALETTES & MONOCHROME ACCENTS
+   ========================================================= */
+const MONO_ACCENTS = [
+  { name: 'CYAN',    hex: '#2ee6e6' },
+  { name: 'EMERALD', hex: '#00ff88' },
+  { name: 'AMBER',   hex: '#ffae2e' },
+  { name: 'CRIMSON', hex: '#ff2e55' },
+  { name: 'VIOLET',  hex: '#b85cff' },
+  { name: 'COBALT',  hex: '#4a8cff' },
+  { name: 'MAGENTA', hex: '#ff3d9a' },
+  { name: 'WHITE',   hex: '#f0f6ff' },
+];
+
+const PALETTES = [
+  {
+    id: 'cyber',
+    name: 'CYBER NEON',
+    accent: '#2ee6e6',
+    secondary: '#7a6bff',
+    zone: '#c050ff',
+    colors: { I: '#2ee6e6', J: '#4a6cff', L: '#ff9f2e', O: '#ffd93d', S: '#4ade4a', T: '#c45cff', Z: '#ff3d6e' }
+  },
+  {
+    id: 'synth',
+    name: 'SYNTHWAVE',
+    accent: '#ff2a85',
+    secondary: '#00f0ff',
+    zone: '#ff00d4',
+    colors: { I: '#00f0ff', J: '#6e3aff', L: '#ff7b00', O: '#ffe600', S: '#00ff9d', T: '#d938ff', Z: '#ff2a85' }
+  },
+  {
+    id: 'solar',
+    name: 'SOLAR FLARE',
+    accent: '#ffae2e',
+    secondary: '#ff3d5a',
+    zone: '#ff5500',
+    colors: { I: '#ffdf5e', J: '#ff6b35', L: '#ff9f1c', O: '#fff36d', S: '#a7e92f', T: '#d6459b', Z: '#ff2e4c' }
+  },
+  {
+    id: 'emerald',
+    name: 'EMERALD MATRIX',
+    accent: '#00ff88',
+    secondary: '#18c964',
+    zone: '#5effb7',
+    colors: { I: '#5effe8', J: '#1ea896', L: '#8be836', O: '#d4ff4d', S: '#00ff66', T: '#36d695', Z: '#17c964' }
+  },
+  {
+    id: 'pastel',
+    name: 'PASTEL POP',
+    accent: '#7ce8ff',
+    secondary: '#c49bff',
+    zone: '#ff94e8',
+    colors: { I: '#7ce8ff', J: '#8aa8ff', L: '#ffb878', O: '#ffea85', S: '#8cf0a8', T: '#d19cff', Z: '#ff8da6' }
+  },
+  {
+    id: 'retro',
+    name: 'MONO RETRO',
+    accent: '#e2f1ff',
+    secondary: '#8ab4f8',
+    zone: '#b5d8ff',
+    colors: { I: '#ffffff', J: '#7aa2d4', L: '#b8d0eb', O: '#e6f0fa', S: '#9cc0e8', T: '#89b3e0', Z: '#5c87bd' }
+  },
+  {
+    id: 'bw',
+    name: 'BLACK & WHITE',
+    accent: '#ffffff',
+    secondary: '#ffffff',
+    zone: '#ffffff',
+    colors: { I: '#ffffff', J: '#ffffff', L: '#ffffff', O: '#ffffff', S: '#ffffff', T: '#ffffff', Z: '#ffffff' }
+  },
+  {
+    id: 'mono',
+    name: 'MONOCHROME',
+    accent: '#2ee6e6',
+    secondary: '#2ee6e6',
+    zone: '#2ee6e6',
+    colors: { I: '#2ee6e6', J: '#2ee6e6', L: '#2ee6e6', O: '#2ee6e6', S: '#2ee6e6', T: '#2ee6e6', Z: '#2ee6e6' }
+  }
+];
+
+/* =========================================================
+   CONFIG - Zone Marathon rules & User Settings
+   ========================================================= */
+const CONFIG = {
+  levelCap: 15,
+  linesPerLevel: 10,
+  minLinesGoal: 40,
+  maxLinesGoal: 400,
+  linesStep: 40,
+  lockDelay: 0.5,
+  lockResetLimit: 15,
+  das: 0.13,
+  arr: 0.02,
+  softDropFactor: 20,
+  previewCount: 5,
+  countdown: 3,
+  zoneEnabled: true,
+  linesPerQuarter: 8,
+  zoneMaxDuration: 20,
+  zoneMultiplier: 2,
+  zoneFullMultiplier: 3,
+};
+let startLevel = 1;
+let lineGoal = 120;
+let endlessMode = false;
+let zenMode = false;
+
+const settings = {
+  oled: false,
+  orientation: 'auto',
+  paletteIdx: 0,
+  monoAccentIdx: 0,
+  touchControls: 'auto',
+  touchLayout: 'default',
+  appScale: 100,
+  assists: false,
+  alwaysUseDefaultName: false,
+  defaultName: '',
+  hasSetUsername: false,
+};
+
+let firstRunNameOpen = false;
+let firstRunName = '';
+let settingsSnapshot = null;
+let settingsOpen = false;
+let settingsFocus = 0;
+let highScoresOpen = false;
+let highScoresScrollY = 0;
+let highScoresMaxScroll = 0;
+let highScorePromptOpen = false;
+let hsPromptFocus = 1;
+let pauseFocus = 0;
+let gameOverFocus = 0;
+let titleFocus = 5;
+let textInputTarget = null;
+let currentHsName = '';
+let highScores = [];
+let lastInputDevice = 'keyboard';
+let draggingScaleSlider = false;
+let dragSliderTrack = null;
+let settingsScrollY = 0;
+let settingsMaxScroll = 0;
+let settingsViewport = null;
+let draggingSettingsList = false;
+let settingsDragStartY = 0;
+let settingsDragStartScroll = 0;
+let settingsDragMoved = false;
+let pendingSettingsButton = null;
+let zenToggleAnim = 0;
+let assistsToggleAnim = 0;
+
+/* =========================================================
+   EASTER EGGS & SPECIAL MODES STATE
+   ========================================================= */
+let matrixTerminalActive = false;
+let matrixColumns = [];
+let matrixTimer = 0;
+let backSpamCount = 0;
+let backSpamTimer = 0;
+let matrixHintAlpha = 1;
+let matrixInactivityTimer = 0;
+let matrixLastShakeTime = 0;
+let motionPermissionRequested = false;
+
+let rickrollActive = false;
+let rickrollNoteTimer = 0;
+let rickrollNoteIdx = 0;
+let logoClickCount = 0;
+let logoClickTimer = 0;
+
+let zenToggleCount = 0;
+let zenToggleWindowTimer = 0;
+let secretSuperSpeedMode = false;
+let noZenIntroActive = false;
+let noZenIntroTimer = 0;
+
+let touchEditorOpen = false;
+let draggingTouchBtnId = null;
+let dragTouchOffsetX = 0;
+let dragTouchOffsetY = 0;
+let customTouchPositions = { portrait: {}, landscape: {} };
+
+let audioCtx = null;
+const RICKROLL_LYRICS = [
+  "Never gonna give you up,",
+  "Never gonna let you down,",
+  "Never gonna run around and desert you,",
+  "Never gonna make you cry,",
+  "Never gonna say goodbye,",
+  "Never gonna tell a lie and hurt you"
+];
+
+const RICKROLL_MELODY = [
+  { f: 440.00, d: 0.16, line: 0 }, { f: 493.88, d: 0.16, line: 0 }, { f: 587.33, d: 0.16, line: 0 }, { f: 493.88, d: 0.16, line: 0 },
+  { f: 739.99, d: 0.34, line: 0 }, { f: 739.99, d: 0.34, line: 0 }, { f: 659.25, d: 0.56, line: 0 },
+  { f: 440.00, d: 0.16, line: 1 }, { f: 493.88, d: 0.16, line: 1 }, { f: 587.33, d: 0.16, line: 1 }, { f: 493.88, d: 0.16, line: 1 },
+  { f: 659.25, d: 0.34, line: 1 }, { f: 659.25, d: 0.34, line: 1 }, { f: 587.33, d: 0.36, line: 1 }, { f: 554.37, d: 0.18, line: 1 }, { f: 493.88, d: 0.36, line: 1 },
+  { f: 440.00, d: 0.16, line: 2 }, { f: 493.88, d: 0.16, line: 2 }, { f: 587.33, d: 0.16, line: 2 }, { f: 493.88, d: 0.16, line: 2 },
+  { f: 587.33, d: 0.36, line: 2 }, { f: 659.25, d: 0.22, line: 2 }, { f: 554.37, d: 0.32, line: 2 }, { f: 493.88, d: 0.22, line: 2 },
+  { f: 440.00, d: 0.38, line: 2 }, { f: 440.00, d: 0.22, line: 2 }, { f: 659.25, d: 0.38, line: 2 }, { f: 587.33, d: 0.62, line: 2 },
+  { f: 440.00, d: 0.16, line: 3 }, { f: 493.88, d: 0.16, line: 3 }, { f: 587.33, d: 0.16, line: 3 }, { f: 493.88, d: 0.16, line: 3 },
+  { f: 739.99, d: 0.34, line: 3 }, { f: 739.99, d: 0.34, line: 3 }, { f: 659.25, d: 0.56, line: 3 },
+  { f: 440.00, d: 0.16, line: 4 }, { f: 493.88, d: 0.16, line: 4 }, { f: 587.33, d: 0.16, line: 4 }, { f: 493.88, d: 0.16, line: 4 },
+  { f: 880.00, d: 0.36, line: 4 }, { f: 554.37, d: 0.22, line: 4 }, { f: 587.33, d: 0.38, line: 4 }, { f: 554.37, d: 0.18, line: 4 }, { f: 493.88, d: 0.36, line: 4 },
+  { f: 440.00, d: 0.16, line: 5 }, { f: 493.88, d: 0.16, line: 5 }, { f: 587.33, d: 0.16, line: 5 }, { f: 493.88, d: 0.16, line: 5 },
+  { f: 587.33, d: 0.36, line: 5 }, { f: 659.25, d: 0.22, line: 5 }, { f: 554.37, d: 0.32, line: 5 }, { f: 493.88, d: 0.22, line: 5 },
+  { f: 440.00, d: 0.40, line: 5 }, { f: 440.00, d: 0.22, line: 5 }, { f: 659.25, d: 0.40, line: 5 }, { f: 587.33, d: 0.85, line: 5 }
+];
+
+const RICK_ASCII_FRAMES = [
+  [
+    "        ▄▄████▄▄        ",
+    "       ██████████       ",
+    "       ██ ▀██▀ ██       ",
+    "       ▀████████▀       ",
+    "     ▄███▄████▄███▄     ",
+    "    ███ ████████ ███    ",
+    "   ▐██  ████████  ██▌   ",
+    "    ▀▀  ████████  ▀▀    ",
+    "        ████████        ",
+    "        ███  ███        ",
+    "       ▐██▌  ▐██▌       ",
+    "      ▄███    ███▄      "
+  ],
+  [
+    "         ▄▄████▄▄       ",
+    "        ██████████      ",
+    "    ▄   ██ ▀██▀ ██      ",
+    "   ▐█▌  ▀████████▀      ",
+    "    ▀████▄████▄███▄     ",
+    "        ████████ ███    ",
+    "        ████████  ▀█▌   ",
+    "        ████████        ",
+    "        ████████        ",
+    "       ▐███  ███▌       ",
+    "       ███    ███       ",
+    "      ███▀    ▀███      "
+  ],
+  [
+    "        ▄▄████▄▄        ",
+    "       ██████████       ",
+    "       ██ ▀██▀ ██   ▄   ",
+    "       ▀████████▀  ▐█▌  ",
+    "     ▄███▄████▄████▀    ",
+    "    ███ ████████        ",
+    "   ▐█▀  ████████        ",
+    "        ████████        ",
+    "        ████████        ",
+    "       ▐███  ███▌       ",
+    "        ███  ███        ",
+    "       ▄███  ███▄       "
+  ],
+  [
+    "       ▄▄████▄▄         ",
+    "      ██████████        ",
+    "      ██ ▀██▀ ██        ",
+    "   ▐█▄▀████████▀▄█▌     ",
+    "    ▀████████████▀      ",
+    "       ████████         ",
+    "       ████████         ",
+    "       ████████         ",
+    "       ████████         ",
+    "      ▐███  ███▌        ",
+    "      ███    ███        ",
+    "     ▄██▀    ▀██▄       "
+  ]
+];
+
+function play8BitNote(freq, duration) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const now = audioCtx.currentTime;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, now);
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration * 0.92);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + duration);
+
+    const bass = audioCtx.createOscillator();
+    const bGain = audioCtx.createGain();
+    bass.type = 'triangle';
+    bass.frequency.setValueAtTime(freq * 0.5, now);
+    bGain.gain.setValueAtTime(0.05, now);
+    bGain.gain.exponentialRampToValueAtTime(0.001, now + duration * 0.9);
+    bass.connect(bGain);
+    bGain.connect(audioCtx.destination);
+    bass.start(now);
+    bass.stop(now + duration);
+  } catch (_) {}
+}
+
+function playEvil8BitSequence() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const now = audioCtx.currentTime;
+
+    const evilNotes = [
+      { f: 220.00, t: 0.00, d: 0.32 },
+      { f: 207.65, t: 0.32, d: 0.32 },
+      { f: 196.00, t: 0.64, d: 0.32 },
+      { f: 155.56, t: 0.96, d: 0.50 },
+      { f: 146.83, t: 1.46, d: 0.25 },
+      { f: 138.59, t: 1.71, d: 0.25 },
+      { f: 110.00, t: 1.96, d: 1.04 },
+    ];
+    for (const n of evilNotes) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(n.f, now + n.t);
+      gain.gain.setValueAtTime(0.11, now + n.t);
+      gain.gain.exponentialRampToValueAtTime(0.002, now + n.t + n.d * 0.96);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now + n.t);
+      osc.stop(now + n.t + n.d);
+
+      const sub = audioCtx.createOscillator();
+      const sGain = audioCtx.createGain();
+      sub.type = 'square';
+      sub.frequency.setValueAtTime(n.f * 0.5, now + n.t);
+      sGain.gain.setValueAtTime(0.09, now + n.t);
+      sGain.gain.exponentialRampToValueAtTime(0.002, now + n.t + n.d * 0.96);
+      sub.connect(sGain);
+      sGain.connect(audioCtx.destination);
+      sub.start(now + n.t);
+      sub.stop(now + n.t + n.d);
+    }
+  } catch (_) {}
+}
+
+function triggerZenToggleEasterEggCheck() {
+  if (zenToggleWindowTimer <= 0) zenToggleCount = 0;
+  zenToggleCount++;
+  zenToggleWindowTimer = 4.0;
+  if (zenToggleCount > 10) {
+    zenToggleCount = 0;
+    zenMode = false;
+    secretSuperSpeedMode = true;
+    settingsOpen = false;
+    highScoresOpen = false;
+    highScorePromptOpen = false;
+    closeTextInput();
+    noZenIntroActive = true;
+    noZenIntroTimer = 3.0;
+    playEvil8BitSequence();
+  }
+}
+
+function getActiveAppScale() {
+  return Math.max(0.5, Math.min(5.0, (settings.appScale || 100) / 100));
+}
+
+/* =========================================================
+   PIECES / SRS
+   ========================================================= */
+const SHAPES = {
+  I: { n: 4, cells: [[0,1],[1,1],[2,1],[3,1]], color: '#2ee6e6' },
+  J: { n: 3, cells: [[0,0],[0,1],[1,1],[2,1]], color: '#4a6cff' },
+  L: { n: 3, cells: [[2,0],[0,1],[1,1],[2,1]], color: '#ff9f2e' },
+  O: { n: 2, cells: [[0,0],[1,0],[0,1],[1,1]], color: '#ffd93d' },
+  S: { n: 3, cells: [[1,0],[2,0],[0,1],[1,1]], color: '#4ade4a' },
+  T: { n: 3, cells: [[1,0],[0,1],[1,1],[2,1]], color: '#c45cff' },
+  Z: { n: 3, cells: [[0,0],[1,0],[1,1],[2,1]], color: '#ff3d6e' },
+};
+
+function shadeHex(hex, amt) {
+  const clean = hex.replace('#', '');
+  const n = parseInt(clean, 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  if (amt >= 0) { r += (255 - r) * amt; g += (255 - g) * amt; b += (255 - b) * amt; }
+  else { r *= (1 + amt); g *= (1 + amt); b *= (1 + amt); }
+  const toH = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${toH(r)}${toH(g)}${toH(b)}`;
+}
+
+function hexToRgba(hex, alpha) {
+  const clean = hex.replace('#', '');
+  const n = parseInt(clean, 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function isBwTheme() {
+  return PALETTES[settings.paletteIdx] && PALETTES[settings.paletteIdx].id === 'bw';
+}
+
+function isMonoTheme() {
+  return PALETTES[settings.paletteIdx] && PALETTES[settings.paletteIdx].id === 'mono';
+}
+
+function updateMonoPaletteColors() {
+  const monoPal = PALETTES.find(p => p.id === 'mono');
+  if (!monoPal) return;
+  const acc = (MONO_ACCENTS[settings.monoAccentIdx] || MONO_ACCENTS[0]).hex;
+  monoPal.accent = acc;
+  monoPal.secondary = shadeHex(acc, -0.22);
+  monoPal.zone = shadeHex(acc, 0.25);
+  monoPal.colors = {
+    I: shadeHex(acc, 0.22),
+    O: shadeHex(acc, 0.12),
+    T: acc,
+    S: shadeHex(acc, -0.06),
+    Z: shadeHex(acc, -0.14),
+    L: shadeHex(acc, -0.22),
+    J: shadeHex(acc, -0.30),
+  };
+}
+
+function applyPalette(idx) {
+  settings.paletteIdx = ((idx % PALETTES.length) + PALETTES.length) % PALETTES.length;
+  updateMonoPaletteColors();
+  const pal = PALETTES[settings.paletteIdx];
+  for (const k in pal.colors) {
+    if (SHAPES[k]) SHAPES[k].color = pal.colors[k];
+  }
+  document.body.classList.toggle('bw-mode', isBwTheme());
+}
+
+function openSettingsModal() {
+  settingsSnapshot = {
+    oled: settings.oled,
+    orientation: settings.orientation,
+    paletteIdx: settings.paletteIdx,
+    monoAccentIdx: settings.monoAccentIdx,
+    touchControls: settings.touchControls,
+    touchLayout: settings.touchLayout,
+    endlessMode,
+    zenMode,
+    assists: settings.assists,
+    startLevel,
+    lineGoal,
+    appScale: settings.appScale,
+    alwaysUseDefaultName: settings.alwaysUseDefaultName,
+    defaultName: settings.defaultName,
+  };
+  settingsOpen = true;
+  settingsFocus = 0;
+  settingsScrollY = 0;
+}
+
+function cancelSettingsModal() {
+  if (settingsSnapshot) {
+    settings.oled = settingsSnapshot.oled;
+    settings.orientation = settingsSnapshot.orientation;
+    settings.paletteIdx = settingsSnapshot.paletteIdx;
+    settings.monoAccentIdx = settingsSnapshot.monoAccentIdx;
+    settings.touchControls = settingsSnapshot.touchControls;
+    settings.touchLayout = settingsSnapshot.touchLayout;
+    endlessMode = settingsSnapshot.endlessMode;
+    zenMode = settingsSnapshot.zenMode;
+    settings.assists = settingsSnapshot.assists;
+    startLevel = settingsSnapshot.startLevel;
+    lineGoal = settingsSnapshot.lineGoal;
+    if (isRunActive()) state.lineGoal = lineGoal;
+    settings.appScale = settingsSnapshot.appScale;
+    settings.alwaysUseDefaultName = settingsSnapshot.alwaysUseDefaultName;
+    settings.defaultName = settingsSnapshot.defaultName;
+    applyPalette(settings.paletteIdx);
+    saveSettings();
+    updateLayout();
+  }
+  settingsOpen = false;
+  closeTextInput();
+}
+
+function saveAndCloseSettingsModal() {
+  saveSettings();
+  settingsSnapshot = null;
+  settingsOpen = false;
+  closeTextInput();
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem('disconnected_settings_v3');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.oled === 'boolean') settings.oled = parsed.oled;
+      if (['auto','landscape','portrait'].includes(parsed.orientation)) settings.orientation = parsed.orientation;
+      if (typeof parsed.paletteIdx === 'number') settings.paletteIdx = parsed.paletteIdx;
+      if (typeof parsed.monoAccentIdx === 'number') settings.monoAccentIdx = ((parsed.monoAccentIdx % MONO_ACCENTS.length) + MONO_ACCENTS.length) % MONO_ACCENTS.length;
+      if (['auto','on','off'].includes(parsed.touchControls)) settings.touchControls = parsed.touchControls;
+      if (['default','split','compact','classic'].includes(parsed.touchLayout)) settings.touchLayout = parsed.touchLayout;
+      if (typeof parsed.endlessMode === 'boolean') endlessMode = parsed.endlessMode;
+      if (typeof parsed.zenMode === 'boolean') zenMode = parsed.zenMode;
+      if (typeof parsed.assists === 'boolean') settings.assists = parsed.assists;
+      if (typeof parsed.startLevel === 'number') startLevel = Math.max(1, Math.min(CONFIG.levelCap, parsed.startLevel));
+      if (typeof parsed.lineGoal === 'number') {
+        lineGoal = Math.max(CONFIG.minLinesGoal, Math.min(CONFIG.maxLinesGoal, Math.round(parsed.lineGoal / 40) * 40));
+      }
+      if (typeof parsed.appScale === 'number') {
+        settings.appScale = Math.max(50, Math.min(500, Math.round(parsed.appScale / 5) * 5));
+      }
+      if (typeof parsed.alwaysUseDefaultName === 'boolean') settings.alwaysUseDefaultName = parsed.alwaysUseDefaultName;
+      if (typeof parsed.defaultName === 'string' && parsed.defaultName.trim()) {
+        settings.defaultName = parsed.defaultName.trim().toUpperCase().slice(0, MAX_NAME_LEN);
+      }
+      if (typeof parsed.hasSetUsername === 'boolean') {
+        settings.hasSetUsername = parsed.hasSetUsername;
+      }
+      if (parsed.customTouchPositions && typeof parsed.customTouchPositions === 'object') {
+        customTouchPositions = {
+          portrait: parsed.customTouchPositions.portrait || {},
+          landscape: parsed.customTouchPositions.landscape || {},
+        };
+      }
+    }
+    const rawScores = localStorage.getItem('disconnected_highscores_v1');
+    if (rawScores) {
+      const parsedScores = JSON.parse(rawScores);
+      if (Array.isArray(parsedScores)) {
+        highScores = parsedScores.map(r => ({
+          ...r,
+          name: String(r.name || 'RICK').toUpperCase().slice(0, MAX_NAME_LEN)
+        }));
+      }
+    }
+  } catch (_) {}
+  applyPalette(settings.paletteIdx);
+  document.body.classList.toggle('oled-mode', settings.oled);
+  zenToggleAnim = zenMode ? 1 : 0;
+  assistsToggleAnim = settings.assists ? 1 : 0;
+
+  if (!settings.hasSetUsername) {
+    firstRunNameOpen = true;
+    firstRunName = settings.defaultName || '';
+    setTimeout(() => {
+      if (firstRunNameOpen) openTextInput('firstRunName');
+    }, 50);
+  } else {
+    currentHsName = settings.defaultName || 'RICK';
+  }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem('disconnected_settings_v3', JSON.stringify({
+      oled: settings.oled,
+      orientation: settings.orientation,
+      paletteIdx: settings.paletteIdx,
+      monoAccentIdx: settings.monoAccentIdx,
+      touchControls: settings.touchControls,
+      touchLayout: settings.touchLayout,
+      endlessMode,
+      zenMode,
+      assists: settings.assists,
+      startLevel,
+      lineGoal,
+      appScale: settings.appScale,
+      alwaysUseDefaultName: settings.alwaysUseDefaultName,
+      defaultName: settings.defaultName.slice(0, MAX_NAME_LEN),
+      hasSetUsername: settings.hasSetUsername,
+      customTouchPositions,
+    }));
+  } catch (_) {}
+  document.body.classList.toggle('oled-mode', settings.oled);
+  document.body.classList.toggle('bw-mode', isBwTheme());
+}
+
+function saveHighScores() {
+  try {
+    localStorage.setItem('disconnected_highscores_v1', JSON.stringify(highScores.slice(0, 30)));
+  } catch (_) {}
+}
+
+function isTouchVisible() {
+  if (settings.touchControls === 'on') return true;
+  if (settings.touchControls === 'off') return false;
+  const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  return coarse || lastInputDevice === 'touch' || isPortrait;
+}
+
+function getTouchControlScale() {
+  const s = (settings.appScale || 100) / 100;
+  return Math.max(0.75, Math.min(1.22, Math.pow(s, 0.25)));
+}
+
+function getTouchLayoutMetrics() {
+  const tScale = getTouchControlScale();
+  const layout = settings.touchLayout || 'default';
+
+  if (isPortrait) {
+    const sideMargin = 10;
+    const availW = W - sideMargin * 2;
+    if (layout === 'split') {
+      const clusterW = Math.min(Math.round(210 * tScale), Math.floor((availW - 12) / 2));
+      const btnW = Math.floor((clusterW - 8) / 2);
+      const row1H = Math.round(50 * tScale);
+      const dpadH = Math.round(76 * tScale);
+      const totalPadH = row1H + 8 + dpadH + 8 + dpadH + 12;
+      const topY = H - totalPadH;
+      return {
+        sideMargin,
+        clusterW,
+        btnW,
+        leftClusterX: sideMargin,
+        rightClusterX: W - sideMargin - clusterW,
+        row1H,
+        dpadH,
+        rotH: dpadH * 2 + 8,
+        topY,
+        layout: 'split'
+      };
+    } else if (layout === 'compact') {
+      const clusterW = Math.min(Math.round(360 * tScale), availW);
+      const leftX = Math.floor((W - clusterW) / 2);
+      const btnW = Math.floor((clusterW - 12) / 4);
+      const row1H = Math.round(48 * tScale);
+      const dpadH = Math.round(68 * tScale);
+      const totalPadH = row1H + 8 + dpadH + 12;
+      const topY = H - totalPadH;
+      return {
+        sideMargin: leftX,
+        clusterW,
+        btnW,
+        leftClusterX: leftX,
+        rightClusterX: leftX,
+        row1H,
+        dpadH,
+        rotH: dpadH,
+        topY,
+        layout: 'compact'
+      };
+    } else {
+      const clusterW = Math.min(Math.round(248 * tScale), Math.floor((availW - 16) / 2));
+      const btnW = Math.floor((clusterW - 10) / 2);
+      const row1H = Math.round(56 * tScale);
+      const dpadH = Math.round(84 * tScale);
+      const totalPadH = row1H + 10 + dpadH + 10 + dpadH + 14;
+      const topY = H - totalPadH;
+      return {
+        sideMargin,
+        clusterW,
+        btnW,
+        leftClusterX: sideMargin,
+        rightClusterX: W - sideMargin - clusterW,
+        row1H,
+        dpadH,
+        rotH: dpadH * 2 + 8,
+        topY,
+        layout: 'default'
+      };
+    }
+  } else {
+    const sideMargin = 14;
+    const maxSideW = Math.floor(W * 0.25);
+    const clusterW = Math.max(160, Math.min(maxSideW, Math.round(220 * tScale)));
+    const btnW = Math.floor((clusterW - 10) / 2);
+    const row1H = Math.round(52 * tScale);
+    const dpadH = Math.round(80 * tScale);
+    const totalPadH = row1H + 8 + dpadH + 8 + dpadH;
+    const baseY = Math.max(56, H - totalPadH - 18);
+    return {
+      leftX: sideMargin,
+      rightX: W - sideMargin - clusterW,
+      clusterW,
+      btnW,
+      row1H,
+      dpadH,
+      rotH: dpadH * 2 + 8,
+      baseY,
+      layout
+    };
+  }
+}
+
+function updateLayout() {
+  const vw = Math.max(320, window.innerWidth || 960);
+  const vh = Math.max(320, window.innerHeight || 720);
+  const aspect = vw / vh;
+
+  if (settings.orientation === 'portrait') {
+    isPortrait = true;
+  } else if (settings.orientation === 'landscape') {
+    isPortrait = false;
+  } else {
+    isPortrait = vh > vw * 1.02;
+  }
+
+  const showTouch = isTouchVisible();
+  if (isPortrait) {
+    const baseW = 540;
+    const minH = showTouch ? 940 : 780;
+    if (vh / vw >= minH / baseW) {
+      W = baseW;
+      H = Math.round(baseW / aspect);
+    } else {
+      H = minH;
+      W = Math.max(500, Math.round(minH * aspect));
+    }
+    CELL = showTouch ? 22 : 25;
+    BOARD_W = COLS * CELL;
+    BOARD_H = ROWS * CELL;
+    BOARD_X = Math.floor((W - BOARD_W) / 2);
+    BOARD_Y = showTouch ? Math.max(104, Math.floor((H - BOARD_H - 310) * 0.42)) : Math.max(110, Math.floor((H - BOARD_H) / 2));
+  } else {
+    const baseH = 720;
+    const minW = 860;
+    if (aspect >= minW / baseH) {
+      H = baseH;
+      W = Math.round(baseH * aspect);
+    } else {
+      W = minW;
+      H = Math.max(660, Math.round(minW / aspect));
+    }
+    CELL = 26;
+    BOARD_W = COLS * CELL;
+    BOARD_H = ROWS * CELL;
+    BOARD_X = Math.floor((W - BOARD_W) / 2);
+    BOARD_Y = Math.floor((H - BOARD_H) / 2) + 18;
+  }
+
+  canvas.style.width = `${vw}px`;
+  canvas.style.height = `${vh}px`;
+
+  const fitScale = Math.min(vw / W, vh / H);
+  dpr = window.devicePixelRatio || 1;
+  const max4kScale = isPortrait ? (3840 / H) : (3840 / W);
+  renderScale = Math.min(max4kScale, Math.max(1, dpr * fitScale));
+  canvas.width = Math.round(W * renderScale);
+  canvas.height = Math.round(H * renderScale);
+
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+}
+
+window.addEventListener('resize', updateLayout);
+
+function rotateCells(cells, n, dir) {
+  return cells.map(([x, y]) => dir > 0 ? [n - 1 - y, x] : [y, n - 1 - x]);
+}
+
+const ROTATIONS = {};
+for (const k in SHAPES) {
+  const n = SHAPES[k].n;
+  let cells = SHAPES[k].cells;
+  const states = [cells];
+  for (let i = 1; i < 4; i++) { cells = rotateCells(cells, n, 1); states.push(cells); }
+  ROTATIONS[k] = states;
+}
+
+const KICKS_JLSTZ = {
+  '0>1': [[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],
+  '1>0': [[0,0],[1,0],[1,1],[0,-2],[1,-2]],
+  '1>2': [[0,0],[1,0],[1,1],[0,-2],[1,-2]],
+  '2>1': [[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],
+  '2>3': [[0,0],[1,0],[1,-1],[0,2],[1,2]],
+  '3>2': [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]],
+  '3>0': [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]],
+  '0>3': [[0,0],[1,0],[1,-1],[0,2],[1,2]],
+};
+const KICKS_I = {
+  '0>1': [[0,0],[-2,0],[1,0],[-2,1],[1,-2]],
+  '1>0': [[0,0],[2,0],[-1,0],[2,-1],[-1,2]],
+  '1>2': [[0,0],[-1,0],[2,0],[-1,-2],[2,1]],
+  '2>1': [[0,0],[1,0],[-2,0],[1,2],[-2,-1]],
+  '2>3': [[0,0],[2,0],[-1,0],[2,-1],[-1,2]],
+  '3>2': [[0,0],[-2,0],[1,0],[-2,1],[1,-2]],
+  '3>0': [[0,0],[1,0],[-2,0],[1,2],[-2,-1]],
+  '0>3': [[0,0],[-1,0],[2,0],[-1,-2],[2,1]],
+};
+
+/* =========================================================
+   STATE
+   ========================================================= */
+const state = {
+  phase: 'title',
+  board: [],
+  buffer: [],
+  cur: null,
+  visualX: 0,
+  visualY: 0,
+  fallProgress: 0,
+  dropTrail: null,
+  hold: null,
+  canHold: true,
+  bag: [],
+  nextQueue: [],
+  score: 0,
+  lines: 0,
+  level: 1,
+  maxLevel: 1,
+  initialLineGoal: 120,
+  lineGoal: 120,
+  zenRun: false,
+  recordTimestamp: '',
+  recordSaved: false,
+  combo: -1,
+  b2b: false,
+  gravTimer: 0,
+  lockTimer: 0,
+  lockResets: 0,
+  lastMoveRotate: false,
+  lastKick: -1,
+  lowestY: 0,
+  startLevel: 1,
+  countdown: 0,
+  softDrop: false,
+  zone: 0,
+  zoneActive: false,
+  zoneFullCharge: false,
+  zoneTimer: 0,
+  zoneDuration: CONFIG.zoneMaxDuration,
+  zoneLines: 0,
+  victory: false,
+  time: 0,
+  gameOverTimer: 0,
+  flash: 0,
+  zoneFlash: 0,
+  toast: '',
+  toastTimer: 0,
+};
+
+/* =========================================================
+   ZONE CLEAR TITLES & GRADING
+   ========================================================= */
+const ZONE_TITLES = {
+  1: 'SINGLE',
+  2: 'DOUBLE',
+  3: 'TRIPLE',
+  4: 'TETRIS',
+  5: 'PENTRIS',
+  6: 'HEXATRIS',
+  7: 'HEPTATRIS',
+  8: 'OCTORIS',
+  9: 'ENNEATRIS',
+  10: 'DECATRIS',
+  11: 'HENDECATRIS',
+  12: 'DODECATRIS',
+  13: 'TRIDECATRIS',
+  14: 'TETRADECATRIS',
+  15: 'PENTADECATRIS',
+  16: 'DECAHEXATRIS',
+  17: 'HEPTADECATRIS',
+  18: 'PERFECTRIS',
+  19: 'ENNEADECATRIS',
+  20: 'ULTIMATRIS',
+  21: 'KIRBTRIS',
+  22: 'IMPOSSIBILITRIS',
+  23: 'INFINITRIS',
+};
+
+function getZoneTitle(n) {
+  if (n >= 23) return ZONE_TITLES[23];
+  return ZONE_TITLES[n] || `${n} LINES`;
+}
+
+function computeGrade(score, targetLines = 150) {
+  const ratio = Math.max(0.25, targetLines / 150);
+  if (score >= 1100000 * ratio) return 'SS';
+  if (score >= 850000 * ratio)  return 'S';
+  if (score >= 600000 * ratio)  return 'A';
+  if (score >= 400000 * ratio)  return 'B';
+  if (score >= 220000 * ratio)  return 'C';
+  return 'D';
+}
+
+function isRunActive() {
+  return state.phase === 'countdown' || state.phase === 'playing' || state.phase === 'paused';
+}
+
+function getMinLineGoal() {
+  if (!isRunActive()) return CONFIG.minLinesGoal;
+  const minByCleared = (Math.floor(state.lines / CONFIG.linesStep) + 1) * CONFIG.linesStep;
+  return Math.min(CONFIG.maxLinesGoal, Math.max(CONFIG.minLinesGoal, state.initialLineGoal, minByCleared));
+}
+
+function adjustLineGoal(deltaSteps) {
+  const minGoal = getMinLineGoal();
+  lineGoal = Math.max(minGoal, Math.min(CONFIG.maxLinesGoal, lineGoal + deltaSteps * CONFIG.linesStep));
+  if (isRunActive()) {
+    state.lineGoal = lineGoal;
+  }
+  if (!settingsOpen) saveSettings();
+}
+
+function formatRecordDateTime(dateObj) {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  const hh = String(dateObj.getHours()).padStart(2, '0');
+  const mm = String(dateObj.getMinutes()).padStart(2, '0');
+  return `${y}-${m}-${d} ${hh}:${mm}`;
+}
+
+/* =========================================================
+   HELPERS
+   ========================================================= */
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  if (amt >= 0) { r += (255 - r) * amt; g += (255 - g) * amt; b += (255 - b) * amt; }
+  else { r *= (1 + amt); g *= (1 + amt); b *= (1 + amt); }
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
+}
+
+function formatTime(t) {
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function drawBlock(x, y, size, color, ghost = false, fastLogo = false) {
+  const bw = isBwTheme();
+  const p = Math.max(1, size * 0.06);
+  const r = bw ? 2 : size * 0.16;
+
+  if (bw) {
+    ctx.save();
+    roundRect(x + p, y + p, size - p * 2, size - p * 2, r);
+    if (ghost) {
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      const inset = Math.max(3, size * 0.22);
+      if (size - inset * 2 > 2) {
+        ctx.strokeRect(x + inset, y + inset, size - inset * 2, size - inset * 2);
+      }
+    }
+    ctx.restore();
+    return;
+  }
+
+  if (ghost) {
+    ctx.save();
+    roundRect(x + p, y + p, size - p * 2, size - p * 2, r);
+    ctx.globalAlpha = settings.oled ? 0.18 : 0.12;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.globalAlpha = settings.oled ? 0.65 : 0.4;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  const innerW = size - p * 2;
+  if (fastLogo) {
+    roundRect(x + p, y + p, innerW, innerW, r);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.24)';
+    ctx.fillRect(x + p + 1, y + p + 1, Math.max(1, innerW - 2), Math.max(1, innerW * 0.38));
+    ctx.fillStyle = 'rgba(0,0,0,0.24)';
+    ctx.fillRect(x + p + 1, y + p + innerW * 0.72, Math.max(1, innerW - 2), Math.max(1, innerW * 0.26));
+    return;
+  }
+
+  const g = ctx.createLinearGradient(x, y, x + size, y + size);
+  g.addColorStop(0, shade(color, 0.45));
+  g.addColorStop(0.45, color);
+  g.addColorStop(1, shade(color, -0.45));
+  roundRect(x + p, y + p, innerW, innerW, r);
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.20)';
+  roundRect(x + p + 1, y + p + 1, Math.max(1, innerW - 2), Math.max(1, innerW * 0.40), Math.max(1, r * 0.7));
+  ctx.fill();
+
+  roundRect(x + p, y + p, innerW, innerW, r);
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawFocusBlock(x, y, size) {
+  const bw = isBwTheme();
+  const p = Math.max(1, size * 0.06);
+  const r = bw ? 2 : size * 0.16;
+  ctx.save();
+  if (bw) {
+    roundRect(x + p, y + p, size - p * 2, size - p * 2, r);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    const inset = Math.max(4, size * 0.24);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + inset, y + inset, size - inset * 2, size - inset * 2);
+    ctx.restore();
+    return;
+  }
+
+  const pal = PALETTES[settings.paletteIdx];
+  const g = ctx.createLinearGradient(x, y, x + size, y + size);
+  if (isMonoTheme()) {
+    g.addColorStop(0, shadeHex(pal.accent, 0.35));
+    g.addColorStop(0.5, pal.accent);
+    g.addColorStop(1, shadeHex(pal.accent, -0.35));
+  } else {
+    g.addColorStop(0, 'rgba(130, 245, 255, 0.85)');
+    g.addColorStop(0.5, 'rgba(170, 95, 255, 0.78)');
+    g.addColorStop(1, 'rgba(95, 35, 190, 0.85)');
+  }
+  roundRect(x + p, y + p, size - p * 2, size - p * 2, r);
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(220, 245, 255, 0.65)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+  ctx.fillRect(x + p + 2, y + p + 2, size - (p + 2) * 2, (size - p * 2) * 0.32);
+  ctx.restore();
+}
+
+/* =========================================================
+   GAME LOGIC
+   ========================================================= */
+function getCell(x, y) {
+  if (y >= 0 && y < ROWS) return state.board[y][x];
+  return null;
+}
+
+function collides(type, rot, px, py) {
+  const cells = ROTATIONS[type][rot];
+  for (const [cx, cy] of cells) {
+    const x = px + cx, y = py + cy;
+    if (x < 0 || x >= COLS || y >= ROWS || y < -BUFFER) return true;
+    if (getCell(x, y)) return true;
+  }
+  return false;
+}
+
+function canPieceSpawn(type) {
+  const spawnX = Math.floor((COLS - SHAPES[type].n) / 2);
+  return !collides(type, 0, spawnX, -1) && !collides(type, 0, spawnX, 0);
+}
+
+function isPlaySurfaceBeyond75Percent() {
+  if (!state.board || state.board.length < ROWS) return false;
+  let highestRow = ROWS;
+  let occupiedRows = 0;
+  let filledCells = 0;
+  for (let y = 0; y < ROWS; y++) {
+    let rowHasBlock = false;
+    for (let x = 0; x < COLS; x++) {
+      if (state.board[y][x] !== null) {
+        rowHasBlock = true;
+        filledCells++;
+      }
+    }
+    if (rowHasBlock) {
+      occupiedRows++;
+      if (y < highestRow) highestRow = y;
+    }
+  }
+  return highestRow <= Math.floor(ROWS * 0.25) || occupiedRows >= Math.ceil(ROWS * 0.75) || filledCells >= Math.floor(ROWS * COLS * 0.75);
+}
+
+function evaluatePieceFit(type) {
+  const pieceKeys = ROTATIONS[type];
+  let bestScore = -Infinity;
+  let possibleCount = 0;
+
+  if (!canPieceSpawn(type)) {
+    return { possible: false, bestScore: -1000, possibleCount: 0 };
+  }
+
+  for (let rot = 0; rot < 4; rot++) {
+    const cells = pieceKeys[rot];
+    for (let x = -2; x < COLS; x++) {
+      if (collides(type, rot, x, -1) && collides(type, rot, x, 0)) continue;
+      let y = collides(type, rot, x, 0) ? -1 : 0;
+      while (!collides(type, rot, x, y + 1)) y++;
+
+      let allInside = true;
+      let touchesTopLine = false;
+      const occupiedSet = new Set();
+      for (const [cx, cy] of cells) {
+        const bx = x + cx, by = y + cy;
+        if (bx < 0 || bx >= COLS || by < 0 || by >= ROWS) {
+          allInside = false;
+          break;
+        }
+        if (by === 0) touchesTopLine = true;
+        occupiedSet.add(`${bx},${by}`);
+      }
+      if (!allInside) continue;
+
+      possibleCount++;
+
+      let linesCleared = 0;
+      for (let ry = 0; ry < ROWS; ry++) {
+        let full = true;
+        for (let rx = 0; rx < COLS; rx++) {
+          if (state.board[ry][rx] === null && !occupiedSet.has(`${rx},${ry}`)) {
+            full = false;
+            break;
+          }
+        }
+        if (full) linesCleared++;
+      }
+
+      let newHoles = 0;
+      let contacts = 0;
+      for (const [cx, cy] of cells) {
+        const bx = x + cx, by = y + cy;
+        const underY = by + 1;
+        if (underY === ROWS) {
+          contacts += 2;
+        } else if (!occupiedSet.has(`${bx},${underY}`)) {
+          if (state.board[underY][bx] !== null) {
+            contacts += 2;
+          } else {
+            for (let hy = underY; hy < Math.min(ROWS, underY + 3); hy++) {
+              if (state.board[hy][bx] === null && !occupiedSet.has(`${bx},${hy}`)) newHoles++;
+              else break;
+            }
+          }
+        }
+      }
+
+      const score =
+        linesCleared * 140 -
+        newHoles * 42 +
+        contacts * 12 +
+        y * 4 -
+        (touchesTopLine && linesCleared === 0 ? 60 : 0);
+
+      if (score > bestScore) bestScore = score;
+    }
+  }
+
+  return {
+    possible: possibleCount > 0,
+    bestScore: possibleCount > 0 ? bestScore : -1000,
+    possibleCount,
+  };
+}
+
+function pickAssistedPiece(excludeRecent = []) {
+  if (secretSuperSpeedMode) {
+    return 'S';
+  }
+  const types = Object.keys(SHAPES);
+  const evals = types.map(t => {
+    const fit = evaluatePieceFit(t);
+    const recentCount = excludeRecent.filter(r => r === t).length;
+    let weight = 0.25;
+    if (fit.possible) {
+      const normalized = Math.max(2, fit.bestScore + 120);
+      weight = Math.pow(normalized / 25, 2.1);
+      if (fit.bestScore >= 60) weight *= 2.4;
+      weight /= (1 + recentCount * 0.85);
+    }
+    return { type: t, weight, fit };
+  });
+
+  const anyPossible = evals.some(e => e.fit.possible);
+  if (!anyPossible) {
+    return types[Math.floor(Math.random() * types.length)];
+  }
+
+  const totalWeight = evals.reduce((sum, e) => sum + e.weight, 0);
+  let r = Math.random() * totalWeight;
+  for (const e of evals) {
+    r -= e.weight;
+    if (r <= 0) return e.type;
+  }
+  return evals[0].type;
+}
+
+function refillBag() {
+  if (secretSuperSpeedMode) {
+    state.bag = ['S','S','S','S','S','S','S'];
+    return;
+  }
+  if (settings.assists && isPlaySurfaceBeyond75Percent()) {
+    const assistedBag = [];
+    const recent = [...state.nextQueue];
+    for (let i = 0; i < 7; i++) {
+      const picked = pickAssistedPiece(recent.slice(-3));
+      assistedBag.push(picked);
+      recent.push(picked);
+    }
+    state.bag = assistedBag;
+    return;
+  }
+  const t = Object.keys(SHAPES);
+  for (let i = t.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [t[i], t[j]] = [t[j], t[i]];
+  }
+  state.bag = t;
+}
+
+function ensureQueue() {
+  while (state.nextQueue.length < 6) {
+    if (state.bag.length === 0) refillBag();
+    state.nextQueue.push(state.bag.shift());
+  }
+}
+
+function gravityInterval() {
+  if (secretSuperSpeedMode) return 0.018;
+  const l = Math.min(state.level, CONFIG.levelCap);
+  const effL = 1 + (l - 1) * 0.9;
+  return Math.pow(0.8 - (effL - 1) * 0.007, effL - 1) * 1.1;
+}
+
+function makePiece(type) {
+  return { type, rot: 0, x: Math.floor((COLS - SHAPES[type].n) / 2), y: -2 };
+}
+
+function placeNewPiece(type) {
+  const c = makePiece(type);
+  state.cur = c;
+  const blockedAtTop = collides(c.type, c.rot, c.x, -1) || collides(c.type, c.rot, c.x, 0);
+  if (blockedAtTop) {
+    if (state.zoneActive) {
+      endFocus();
+      if (state.phase === 'gameover') return;
+      if (collides(c.type, c.rot, c.x, -1) || collides(c.type, c.rot, c.x, 0)) {
+        gameOver(false);
+        return;
+      }
+    } else {
+      gameOver(false);
+      return;
+    }
+  }
+  if (!collides(c.type, c.rot, c.x, c.y + 1)) {
+    c.y++;
+  }
+  state.visualX = c.x;
+  state.visualY = c.y;
+  state.fallProgress = 0;
+  state.gravTimer = 0;
+  state.lockTimer = 0;
+  state.lockResets = 0;
+  state.lastMoveRotate = false;
+  state.lastKick = -1;
+  state.lowestY = c.y;
+}
+
+function spawn() {
+  ensureQueue();
+  if (secretSuperSpeedMode) {
+    for (let i = 0; i < state.nextQueue.length; i++) {
+      state.nextQueue[i] = 'S';
+    }
+  } else if (settings.assists && isPlaySurfaceBeyond75Percent()) {
+    for (let i = 0; i < state.nextQueue.length; i++) {
+      const fit = evaluatePieceFit(state.nextQueue[i]);
+      if (!fit.possible || fit.bestScore < 20) {
+        state.nextQueue[i] = pickAssistedPiece(state.nextQueue.slice(0, i));
+      }
+    }
+  }
+  const type = state.nextQueue.shift();
+  ensureQueue();
+  placeNewPiece(type);
+  state.canHold = true;
+}
+
+function resetLockTimer() {
+  const c = state.cur;
+  if (!c || !collides(c.type, c.rot, c.x, c.y + 1)) return;
+  if (state.lockResets < CONFIG.lockResetLimit) {
+    state.lockTimer = 0;
+    state.lockResets++;
+  }
+}
+
+function gameOver(victory = false) {
+  state.phase = 'gameover';
+  state.victory = victory;
+  state.gameOverTimer = 0;
+  state.zoneActive = false;
+  secretSuperSpeedMode = false;
+  state.recordTimestamp = formatRecordDateTime(new Date());
+  state.recordSaved = false;
+  gameOverFocus = 0;
+
+  if (zenMode || state.zenRun) {
+    highScorePromptOpen = false;
+    closeTextInput();
+  } else {
+    const baseName = (settings.alwaysUseDefaultName && settings.defaultName.trim())
+      ? settings.defaultName.trim()
+      : (currentHsName || settings.defaultName || 'RICK');
+    currentHsName = baseName.toUpperCase().slice(0, MAX_NAME_LEN);
+    highScorePromptOpen = true;
+    hsPromptFocus = settings.alwaysUseDefaultName ? 1 : 0;
+    if (!settings.alwaysUseDefaultName) {
+      openTextInput('hsName');
+    } else {
+      closeTextInput();
+    }
+  }
+}
+
+function commitFirstRunUsername() {
+  const chosen = (firstRunName.trim() || 'RICK').toUpperCase().slice(0, MAX_NAME_LEN);
+  settings.defaultName = chosen;
+  settings.hasSetUsername = true;
+  currentHsName = chosen;
+  firstRunNameOpen = false;
+  closeTextInput();
+  saveSettings();
+}
+
+function commitHighScoreRecord() {
+  if (zenMode || state.zenRun || state.recordSaved) {
+    highScorePromptOpen = false;
+    closeTextInput();
+    return;
+  }
+  const finalName = (settings.alwaysUseDefaultName && settings.defaultName.trim())
+    ? settings.defaultName.trim()
+    : (currentHsName.trim() || settings.defaultName.trim() || 'RICK');
+
+  const record = {
+    name: finalName.toUpperCase().slice(0, MAX_NAME_LEN),
+    score: state.score,
+    date: state.recordTimestamp || formatRecordDateTime(new Date()),
+    runType: endlessMode ? 'ENDLESS' : `LINES (${state.lineGoal})`,
+    lines: state.lines,
+    maxSpeed: state.maxLevel,
+    victory: state.victory,
+  };
+  highScores.push(record);
+  highScores.sort((a, b) => b.score - a.score || b.lines - a.lines);
+  highScores = highScores.slice(0, 30);
+  saveHighScores();
+  state.recordSaved = true;
+  highScorePromptOpen = false;
+  closeTextInput();
+}
+
+function openTextInput(target) {
+  textInputTarget = target;
+  if (target === 'defaultName') hiddenInput.value = settings.defaultName.slice(0, MAX_NAME_LEN);
+  else if (target === 'firstRunName') hiddenInput.value = firstRunName.slice(0, MAX_NAME_LEN);
+  else hiddenInput.value = currentHsName.slice(0, MAX_NAME_LEN);
+  try {
+    hiddenInput.focus();
+    hiddenInput.setSelectionRange(hiddenInput.value.length, hiddenInput.value.length);
+  } catch (_) {}
+}
+
+function closeTextInput() {
+  textInputTarget = null;
+  try { hiddenInput.blur(); } catch (_) {}
+}
+
+hiddenInput.addEventListener('input', () => {
+  const clean = hiddenInput.value.replace(/▋/g, '').toUpperCase().slice(0, MAX_NAME_LEN);
+  hiddenInput.value = clean;
+  if (textInputTarget === 'defaultName') {
+    settings.defaultName = clean;
+  } else if (textInputTarget === 'firstRunName') {
+    firstRunName = clean;
+  } else if (textInputTarget === 'hsName') {
+    currentHsName = clean;
+  }
+});
+
+function move(dx) {
+  const c = state.cur;
+  if (!c || state.phase !== 'playing') return;
+  if (!collides(c.type, c.rot, c.x + dx, c.y)) {
+    c.x += dx;
+    state.lastMoveRotate = false;
+    resetLockTimer();
+  }
+}
+
+function rotate(dir) {
+  const c = state.cur;
+  if (!c || state.phase !== 'playing') return;
+  if (c.type === 'O') return;
+  const from = c.rot;
+  const to = (from + (dir > 0 ? 1 : 3)) % 4;
+  const table = c.type === 'I' ? KICKS_I : KICKS_JLSTZ;
+  const kicks = table[`${from}>${to}`] || [[0, 0]];
+  for (let i = 0; i < kicks.length; i++) {
+    const [dx, dy] = kicks[i];
+    if (!collides(c.type, to, c.x + dx, c.y + dy)) {
+      const prevY = c.y;
+      c.rot = to; c.x += dx; c.y += dy;
+      if (c.y !== prevY) {
+        state.fallProgress = 0;
+        state.visualY = c.y;
+      }
+      state.lastMoveRotate = true;
+      state.lastKick = i;
+      if (c.y > state.lowestY) { state.lowestY = c.y; state.lockResets = 0; }
+      resetLockTimer();
+      return;
+    }
+  }
+}
+
+function hardDrop() {
+  const c = state.cur;
+  if (!c || state.phase !== 'playing') return;
+  const startY = state.visualY ?? c.y;
+  let d = 0;
+  while (!collides(c.type, c.rot, c.x, c.y + 1)) { c.y++; d++; }
+  if (d > 0) {
+    state.lastMoveRotate = false;
+    state.dropTrail = {
+      type: c.type,
+      rot: c.rot,
+      x: c.x,
+      fromY: startY,
+      toY: c.y,
+      alpha: 0.55,
+    };
+  }
+  state.fallProgress = 0;
+  state.visualX = c.x;
+  state.visualY = c.y;
+  state.score += d * 2;
+  lockPiece();
+}
+
+function holdPiece() {
+  const c = state.cur;
+  if (!c || state.phase !== 'playing' || !state.canHold) return;
+  const t = c.type;
+  if (state.hold === null) {
+    state.hold = t;
+    spawn();
+  } else {
+    const h = state.hold;
+    state.hold = t;
+    placeNewPiece(h);
+  }
+  state.canHold = false;
+}
+
+function activateFocus() {
+  if (!CONFIG.zoneEnabled) return;
+  if (state.phase !== 'playing') return;
+
+  if (state.zoneActive) {
+    endFocus();
+    return;
+  }
+
+  if (state.zone < 25) return;
+
+  state.zoneActive = true;
+  state.zoneFullCharge = (state.zone >= 100);
+  state.zoneDuration = (state.zone / 100) * CONFIG.zoneMaxDuration;
+  state.zoneTimer = state.zoneDuration;
+  state.zoneLines = 0;
+  state.zoneFlash = 1;
+  state.fallProgress = 0;
+  if (state.cur) state.visualY = state.cur.y;
+  showToast(state.zoneFullCharge ? 'MAX FOCUS ACTIVATED' : 'FOCUS ACTIVATED');
+}
+
+function endFocus() {
+  if (!state.zoneActive) return;
+  state.zoneActive = false;
+  state.zoneFlash = 1;
+
+  const n = state.zoneLines;
+  const wasFullCharge = state.zoneFullCharge;
+
+  state.board = state.board.filter(row => !row.every(cell => cell === 'Z'));
+  while (state.board.length < ROWS) {
+    state.board.unshift(new Array(COLS).fill(null));
+  }
+  state.buffer = Array.from({ length: BUFFER }, () => new Array(COLS).fill(null));
+
+  if (n > 0) {
+    state.lines += n;
+    state.level = Math.min(CONFIG.levelCap, state.startLevel + Math.floor(state.lines / CONFIG.linesPerLevel));
+    if (state.level > state.maxLevel) state.maxLevel = state.level;
+
+    const bonus = Math.floor((n * n) * 100 * state.level * (wasFullCharge ? 1.5 : 1));
+    state.score += bonus;
+
+    const title = getZoneTitle(n);
+    showToast(zenMode ? `FOCUS ${title}` : `FOCUS ${title}  +${bonus.toLocaleString()}`);
+  } else {
+    showToast('FOCUS ENDED');
+  }
+
+  state.zoneLines = 0;
+  state.zone = 0;
+  state.zoneTimer = 0;
+  state.zoneFullCharge = false;
+
+  if (!endlessMode && state.lines >= state.lineGoal) {
+    gameOver(true);
+  }
+}
+
+function showToast(text) {
+  state.toast = text;
+  state.toastTimer = 2.5;
+}
+
+function lockPiece() {
+  const c = state.cur;
+  if (!c) return;
+  const cells = ROTATIONS[c.type][c.rot];
+  let anyInField = false;
+
+  for (const [cx, cy] of cells) {
+    const x = c.x + cx, y = c.y + cy;
+    if (x < 0 || x >= COLS) continue;
+    if (y >= 0 && y < ROWS) {
+      state.board[y][x] = c.type;
+      anyInField = true;
+    }
+  }
+  state.buffer = Array.from({ length: BUFFER }, () => new Array(COLS).fill(null));
+
+  let tspin = null;
+  if (c.type === 'T' && state.lastMoveRotate) {
+    const cx0 = c.x + 1, cy0 = c.y + 1;
+    const occ = (x, y) => (x < 0 || x >= COLS || y >= ROWS) || !!getCell(x, y);
+    const corners = [[-1,-1],[1,-1],[-1,1],[1,1]];
+    let filled = 0;
+    for (const [dx, dy] of corners) if (occ(cx0 + dx, cy0 + dy)) filled++;
+    if (filled >= 3) {
+      const fronts = { 0: [[-1,-1],[1,-1]], 1: [[1,-1],[1,1]], 2: [[-1,1],[1,1]], 3: [[-1,-1],[-1,1]] }[c.rot];
+      const frontFilled = fronts.every(([dx, dy]) => occ(cx0 + dx, cy0 + dy));
+      tspin = (frontFilled || state.lastKick === 4) ? 'full' : 'mini';
+    }
+  }
+
+  let linesCleared = 0;
+
+  if (state.zoneActive) {
+    const incompleteRows = [];
+    const zRows = [];
+    for (let y = 0; y < ROWS; y++) {
+      const row = state.board[y];
+      if (row.every(cell => cell === 'Z')) {
+        zRows.push(row);
+      } else if (row.every(cell => cell !== null)) {
+        linesCleared++;
+        zRows.push(new Array(COLS).fill('Z'));
+      } else {
+        incompleteRows.push(row);
+      }
+    }
+    state.zoneLines += linesCleared;
+
+    const visibleZCount = Math.min(ROWS, zRows.length);
+    const keptZRows = zRows.slice(0, visibleZCount);
+    const neededIncomplete = ROWS - keptZRows.length;
+    while (incompleteRows.length < neededIncomplete) {
+      incompleteRows.unshift(new Array(COLS).fill(null));
+    }
+    const trimmedIncomplete = incompleteRows.slice(incompleteRows.length - neededIncomplete);
+    state.board = [...trimmedIncomplete, ...keptZRows];
+  } else {
+    for (let y = ROWS - 1; y >= 0; y--) {
+      if (state.board[y].every(cell => cell !== null)) {
+        state.board.splice(y, 1);
+        state.board.unshift(new Array(COLS).fill(null));
+        linesCleared++;
+        y++;
+      }
+    }
+  }
+
+  const perfectClear = state.board.every(row => row.every(cell => cell === null || cell === 'Z'));
+
+  // Capture previous B2B status BEFORE updating it for this clear.
+  const wasB2b = state.b2b;
+
+  const lvl = state.level;
+  const clampedClears = Math.min(4, linesCleared);
+  let base = 0;
+  if (tspin === 'full') base = [400, 800, 1200, 1600][clampedClears] || 0;
+  else if (tspin === 'mini') base = [100, 200, 400, 0][clampedClears] || 0;
+  else base = [0, 100, 300, 500, 800][clampedClears] || 0;
+
+  const difficult = clampedClears === 4 || (tspin && clampedClears > 0);
+  const b2bMul = (difficult && wasB2b) ? 1.5 : 1;
+  let pts = Math.floor(base * lvl * b2bMul);
+
+  if (linesCleared > 0) {
+    state.combo++;
+    if (state.combo > 0) pts += 50 * state.combo * lvl;
+  } else {
+    state.combo = -1;
+  }
+
+  if (perfectClear && linesCleared > 0) {
+    const pcBase = [0, 800, 1200, 1800, 2000][clampedClears] || 2000;
+    pts += ((clampedClears === 4 && wasB2b) ? 3200 : pcBase) * lvl;
+  }
+
+  if (difficult && linesCleared > 0) state.b2b = true;
+  else if (linesCleared > 0) state.b2b = false;
+
+  const names = ['', 'SINGLE', 'DOUBLE', 'TRIPLE', 'TETRIS'];
+  if (!state.zoneActive) {
+    let label = '';
+    if (tspin === 'full') label = ['', 'T-SPIN SINGLE', 'T-SPIN DOUBLE', 'T-SPIN TRIPLE'][clampedClears] || 'T-SPIN';
+    else if (tspin === 'mini') label = ['T-SPIN MINI', 'T-SPIN MINI SINGLE', 'T-SPIN MINI DOUBLE'][clampedClears] || 'T-SPIN MINI';
+    else label = names[clampedClears];
+    if (wasB2b && difficult && b2bMul > 1) label = 'B2B ' + label;
+    if (state.combo > 0) label += `  x${state.combo + 1}`;
+    if (perfectClear && linesCleared > 0) label += '  PERFECT CLEAR';
+    if (label) showToast(label);
+  } else if (linesCleared > 0) {
+    showToast(`${state.zoneLines} FOCUS LINE${state.zoneLines === 1 ? '' : 'S'}  (${getZoneTitle(state.zoneLines)})`);
+  }
+
+  if (state.zoneActive) {
+    pts *= (state.zoneFullCharge ? CONFIG.zoneFullMultiplier : CONFIG.zoneMultiplier);
+  }
+
+  state.score += pts;
+
+  if (!state.zoneActive) {
+    state.lines += linesCleared;
+    const newLevel = Math.min(CONFIG.levelCap, state.startLevel + Math.floor(state.lines / CONFIG.linesPerLevel));
+    if (newLevel > state.level) {
+      state.level = newLevel;
+      if (state.level > state.maxLevel) state.maxLevel = state.level;
+      if (linesCleared > 0) showToast(`LEVEL ${state.level}`);
+    }
+  }
+
+  if (CONFIG.zoneEnabled && !state.zoneActive && linesCleared > 0) {
+    const prevQuarters = Math.floor(state.zone / 25);
+    const zoneGain = linesCleared * (25 / CONFIG.linesPerQuarter);
+    state.zone = Math.min(100, state.zone + zoneGain);
+    const newQuarters = Math.floor(state.zone / 25);
+    if (newQuarters > prevQuarters && newQuarters === 4) {
+      showToast('FOCUS MAX!');
+    }
+  }
+
+  if (linesCleared > 0) state.flash = 1;
+
+  if (!state.zoneActive && !endlessMode && state.lines >= state.lineGoal) {
+    gameOver(true);
+    return;
+  }
+
+  ensureQueue();
+  if (secretSuperSpeedMode) {
+    for (let i = 0; i < state.nextQueue.length; i++) {
+      state.nextQueue[i] = 'S';
+    }
+  } else if (settings.assists && isPlaySurfaceBeyond75Percent()) {
+    const nextFit = evaluatePieceFit(state.nextQueue[0]);
+    if (!nextFit.possible || nextFit.bestScore < 20) {
+      state.nextQueue[0] = pickAssistedPiece([c.type]);
+    }
+  }
+
+  const nextType = state.nextQueue[0];
+  const nextBlockedAtTop = !canPieceSpawn(nextType);
+
+  if (!anyInField || nextBlockedAtTop) {
+    if (state.zoneActive) {
+      endFocus();
+      if (state.phase === 'gameover') return;
+      if (!canPieceSpawn(state.nextQueue[0])) {
+        gameOver(false);
+        return;
+      }
+    } else {
+      gameOver(false);
+      return;
+    }
+  } else if (state.zoneActive && state.zoneLines >= ROWS) {
+    endFocus();
+  }
+
+  if (state.phase === 'gameover') return;
+  spawn();
+}
+
+/* =========================================================
+   UPDATE & TIMING
+   ========================================================= */
+const kb = { left: false, right: false, down: false };
+const gpb = { left: false, right: false, down: false };
+const touchHeld = { left: false, right: false, down: false };
+
+let uiTime = 0;
+let fpsSmooth = 60;
+let dasDir = 0, dasTimer = 0, arrTimer = 0;
+const DAS_DELAY = CONFIG.das, ARR_RATE = CONFIG.arr;
+
+function heldLeft() { return kb.left || gpb.left || touchHeld.left; }
+function heldRight() { return kb.right || gpb.right || touchHeld.right; }
+function heldDown() { return kb.down || gpb.down || touchHeld.down; }
+
+function updateShift(dt) {
+  const dir = (heldRight() ? 1 : 0) - (heldLeft() ? 1 : 0);
+  if (dir === 0) { dasDir = 0; dasTimer = 0; arrTimer = 0; return; }
+  if (dir !== dasDir) {
+    dasDir = dir; dasTimer = 0; arrTimer = 0;
+    move(dir);
+    return;
+  }
+  dasTimer += dt;
+  if (dasTimer >= DAS_DELAY) {
+    arrTimer += dt;
+    while (arrTimer >= ARR_RATE) { arrTimer -= ARR_RATE; move(dir); }
+  }
+}
+
+function updateMatrixTerminal(dt) {
+  matrixTimer += dt;
+  matrixInactivityTimer += dt;
+
+  // Hint text fades after 7 s of inactivity; activity restores it instantly.
+  if (matrixInactivityTimer > 7) {
+    matrixHintAlpha = Math.max(0, matrixHintAlpha - dt * 0.6);
+  }
+
+  if (matrixColumns.length === 0) {
+    const colCount = Math.floor(W / 24);
+    for (let i = 0; i < colCount; i++) {
+      matrixColumns.push({
+        x: i * 24 + 12,
+        y: (Math.random() * H) - H,
+        speed: 180 + Math.random() * 320,
+        type: ['I','J','L','O','S','T','Z'][Math.floor(Math.random() * 7)],
+        rot: Math.floor(Math.random() * 4),
+      });
+    }
+  }
+  for (const c of matrixColumns) {
+    c.y += c.speed * dt;
+    if (c.y > H + 60) {
+      c.y = -60 - Math.random() * 200;
+      c.speed = 180 + Math.random() * 320;
+      c.type = ['I','J','L','O','S','T','Z'][Math.floor(Math.random() * 7)];
+      c.rot = Math.floor(Math.random() * 4);
+    }
+  }
+  // Overlay persists until the user presses a key, taps/clicks, or presses a pad button.
+}
+
+function matrixInteract() {
+  if (!matrixTerminalActive) return;
+  matrixInactivityTimer = 0;
+  matrixHintAlpha = 1;
+}
+
+function requestMotionPermissionIfNeeded() {
+  if (motionPermissionRequested) return;
+  motionPermissionRequested = true;
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEvent.requestPermission === 'function') {
+      DeviceMotionEvent.requestPermission().catch(() => {});
+    }
+  } catch (_) {}
+}
+
+function updateRickroll(dt) {
+  if (!rickrollActive) return;
+  rickrollNoteTimer += dt;
+  const cur = RICKROLL_MELODY[rickrollNoteIdx] || RICKROLL_MELODY[0];
+  if (rickrollNoteTimer >= cur.d) {
+    rickrollNoteTimer = 0;
+    rickrollNoteIdx++;
+    if (rickrollNoteIdx >= RICKROLL_MELODY.length) {
+      rickrollActive = false;
+      rickrollNoteIdx = 0;
+      return;
+    }
+    const nextNote = RICKROLL_MELODY[rickrollNoteIdx];
+    play8BitNote(nextNote.f, nextNote.d);
+  }
+}
+
+function update(dt) {
+  uiTime += dt;
+
+  if (rickrollActive) {
+    updateRickroll(dt);
+    return;
+  }
+  if (noZenIntroActive) {
+    noZenIntroTimer -= dt;
+    if (noZenIntroTimer <= 0) {
+      noZenIntroActive = false;
+      startGame();
+    }
+    return;
+  }
+  if (matrixTerminalActive) {
+    updateMatrixTerminal(dt);
+    return;
+  }
+
+  if (zenToggleWindowTimer > 0) {
+    zenToggleWindowTimer -= dt;
+    if (zenToggleWindowTimer <= 0) zenToggleCount = 0;
+  }
+
+  const targetZen = zenMode ? 1 : 0;
+  zenToggleAnim += (targetZen - zenToggleAnim) * Math.min(1, dt * 18);
+  const targetAssists = settings.assists ? 1 : 0;
+  assistsToggleAnim += (targetAssists - assistsToggleAnim) * Math.min(1, dt * 18);
+
+  if (zenMode && isRunActive()) {
+    state.zenRun = true;
+  }
+
+  if (state.flash > 0) state.flash = Math.max(0, state.flash - dt * 3.5);
+  if (state.zoneFlash > 0) state.zoneFlash = Math.max(0, state.zoneFlash - dt * 2);
+  if (state.dropTrail) {
+    state.dropTrail.alpha -= dt * 4.5;
+    if (state.dropTrail.alpha <= 0) state.dropTrail = null;
+  }
+  if (state.toastTimer > 0) {
+    state.toastTimer -= dt;
+    if (state.toastTimer <= 0) state.toast = '';
+  }
+
+  if (firstRunNameOpen || settingsOpen || highScoresOpen) return;
+  if (state.phase === 'title') return;
+  if (state.phase === 'countdown') {
+    state.countdown -= dt;
+    if (state.countdown <= 0) { state.phase = 'playing'; showToast('GO'); }
+    return;
+  }
+  if (state.phase === 'paused') return;
+  if (state.phase === 'gameover') { state.gameOverTimer += dt; return; }
+
+  state.time += dt;
+
+  if (state.zoneActive) {
+    state.zoneTimer -= dt;
+    state.zone = Math.max(0, (state.zoneTimer / CONFIG.zoneMaxDuration) * 100);
+    if (state.zoneTimer <= 0) {
+      endFocus();
+      if (state.phase === 'gameover') return;
+    }
+  }
+
+  updateShift(dt);
+
+  const c = state.cur;
+  if (!c) return;
+
+  const base = gravityInterval();
+  const softDropActive = heldDown();
+  state.softDrop = softDropActive;
+
+  const softInterval = Math.max(0.012, base / CONFIG.softDropFactor);
+  const effInterval = softDropActive ? softInterval : (state.zoneActive ? Infinity : base);
+
+  if (!collides(c.type, c.rot, c.x, c.y + 1)) {
+    state.lockTimer = 0;
+    if (effInterval < Infinity) {
+      state.fallProgress += dt / effInterval;
+      let guard = 0;
+      while (state.fallProgress >= 1 && guard++ < 40) {
+        state.fallProgress -= 1;
+        if (!collides(c.type, c.rot, c.x, c.y + 1)) {
+          c.y++;
+          state.lastMoveRotate = false;
+          if (c.y > state.lowestY) { state.lowestY = c.y; state.lockResets = 0; }
+          if (softDropActive) state.score += 1;
+        } else {
+          state.fallProgress = 0;
+          break;
+        }
+      }
+    }
+    state.visualY = c.y + Math.min(0.99, state.fallProgress);
+  } else {
+    state.fallProgress = 0;
+    state.visualY = c.y;
+    state.lockTimer += dt;
+    if (state.lockTimer >= CONFIG.lockDelay) {
+      lockPiece();
+      return; // state.cur may now be a different piece; skip stale interpolation
+    }
+  }
+
+  const cur = state.cur;
+  if (!cur) return;
+  const dx = cur.x - state.visualX;
+  if (Math.abs(dx) < 0.005) state.visualX = cur.x;
+  else state.visualX += dx * Math.min(1, dt * 36);
+}
+
+/* =========================================================
+   UI BUTTON REGISTRY & BLOCKY MATRIX LOGO
+   ========================================================= */
+let uiButtons = [];
+let touchPadButtons = [];
+let hoverBtnId = null;
+let scaleSliderRect = null;
+
+function registerButton(id, x, y, w, h, onClick) {
+  uiButtons.push({ id, x, y, w, h, onClick });
+}
+
+const LOGO_GLYPHS = {
+  A: ['0110','1001','1111','1001','1001'],
+  C: ['0111','1000','1000','1000','0111'],
+  D: ['1110','1001','1001','1001','1110'],
+  E: ['1111','1000','1110','1000','1111'],
+  G: ['0111','1000','1011','1001','0111'],
+  I: ['111','010','010','010','111'],
+  K: ['1001','1010','1100','1010','1001'],
+  L: ['1000','1000','1000','1000','1111'],
+  M: ['10001','11011','10101','10001','10001'],
+  N: ['1001','1101','1011','1001','1001'],
+  O: ['0110','1001','1001','1001','0110'],
+  R: ['1110','1001','1110','1010','1001'],
+  S: ['0111','1000','0110','0001','1110'],
+  T: ['111','010','010','010','010'],
+  V: ['10001','10001','10001','01010','00100'],
+  Y: ['10001','01010','00100','00100','00100'],
+  Z: ['1111','0010','0100','1000','1111'],
+  "'": ['01','01','00','00','00'],
+  ' ': ['00','00','00','00','00'],
+};
+
+const RED_LOGO_SHADES = ['#ff2e55', '#ff4769', '#ff1f4b', '#ff5c7a', '#e61943', '#ff335c', '#ff6b88'];
+
+function drawBlockyLogo(centerX, topY, maxWidth, word = 'DISCONNECTED', colorMode = 'palette', maxBlockSize = 13) {
+  const pieceKeys = ['I', 'J', 'L', 'O', 'S', 'T', 'Z'];
+  let totalCols = 0;
+  for (let i = 0; i < word.length; i++) {
+    const g = LOGO_GLYPHS[word[i]] || LOGO_GLYPHS[' '];
+    totalCols += g[0].length;
+    if (i < word.length - 1) totalCols += 1;
+  }
+  const bSize = Math.max(4, Math.min(maxBlockSize, Math.floor(maxWidth / totalCols)));
+  const totalW = totalCols * bSize;
+  let curX = Math.floor(centerX - totalW / 2);
+
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  const mono = isMonoTheme();
+
+  ctx.save();
+  roundRect(curX - 12, topY - 10, totalW + 24, bSize * 5 + 20, bw ? 4 : 12);
+  if (mono) {
+    ctx.fillStyle = hexToRgba(pal.accent, 0.05);
+  } else if (settings.oled || bw) {
+    ctx.fillStyle = '#000000';
+  } else if (colorMode === 'red') {
+    ctx.fillStyle = 'rgba(28,6,14,0.65)';
+  } else {
+    ctx.fillStyle = 'rgba(8,12,26,0.55)';
+  }
+  ctx.fill();
+  ctx.strokeStyle = bw
+    ? '#ffffff'
+    : (colorMode === 'red' ? 'rgba(255,60,100,0.45)' : hexToRgba(pal.accent, mono ? 0.28 : 0.35));
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    const glyph = LOGO_GLYPHS[ch] || LOGO_GLYPHS[' '];
+    const gw = glyph[0].length;
+    let color = '#ffffff';
+    if (!bw) {
+      if (colorMode === 'red') {
+        color = mono ? pal.accent : RED_LOGO_SHADES[i % RED_LOGO_SHADES.length];
+      } else {
+        color = SHAPES[pieceKeys[i % pieceKeys.length]].color;
+      }
+    }
+    const waveY = Math.sin(uiTime * 3.2 + i * 0.45) * 2.2;
+
+    if (ch !== ' ') {
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < gw; c++) {
+          if (glyph[r][c] === '1') {
+            drawBlock(curX + c * bSize, topY + waveY + r * bSize, bSize, color, false, true);
+          }
+        }
+      }
+    }
+    curX += (gw + 1) * bSize;
+  }
+}
+
+function drawCenteredInputWithCursor(text, centerX, baselineY, showCursor) {
+  const cleanText = String(text || '').replace(/▋/g, '').slice(0, MAX_NAME_LEN);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillText(cleanText, centerX, baselineY);
+  if (showCursor && Math.floor(uiTime * 2.5) % 2 === 0) {
+    const tw = ctx.measureText(cleanText).width;
+    ctx.textAlign = 'left';
+    ctx.fillText('▋', centerX + tw / 2 + 4, baselineY);
+  }
+  ctx.restore();
+}
+
+function drawIosToggle(id, x, y, w, h, isOn, onClick, dpadFocused = false, animValue = null) {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  const hovered = hoverBtnId === id || dpadFocused;
+  const r = h / 2;
+
+  ctx.save();
+  roundRect(x, y, w, h, r);
+  if (bw) {
+    ctx.fillStyle = isOn ? '#ffffff' : '#000000';
+    ctx.fill();
+    ctx.lineWidth = dpadFocused ? 2.6 : 1.8;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = isOn
+      ? pal.accent
+      : (settings.oled ? '#121624' : 'rgba(255,255,255,0.16)');
+    ctx.fill();
+    ctx.lineWidth = hovered ? 2.2 : 1.5;
+    ctx.strokeStyle = dpadFocused
+      ? '#ffffff'
+      : (isOn ? '#ffffff' : 'rgba(150,185,245,0.45)');
+    ctx.stroke();
+  }
+
+  if (dpadFocused) {
+    roundRect(x - 3, y - 3, w + 6, h + 6, r + 3);
+    ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  const pad = Math.max(3, Math.round(h * 0.1));
+  const knobD = h - pad * 2;
+  const rawAnim = animValue !== null ? animValue : zenToggleAnim;
+  const animT = Math.max(0, Math.min(1, rawAnim));
+  const knobX = x + pad + (w - knobD - pad * 2) * animT;
+  const knobY = y + pad;
+
+  ctx.beginPath();
+  ctx.arc(knobX + knobD / 2, knobY + knobD / 2, knobD / 2, 0, Math.PI * 2);
+  ctx.fillStyle = bw ? (isOn ? '#000000' : '#ffffff') : '#ffffff';
+  ctx.fill();
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.stroke();
+  ctx.restore();
+
+  registerButton(id, x, y, w, h, onClick);
+}
+
+/* =========================================================
+   RENDER
+   ========================================================= */
+function drawBackground() {
+  const bw = isBwTheme();
+  if (bw) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+    return;
+  }
+
+  if (settings.oled) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.globalAlpha = state.zoneActive ? 0.08 : 0.035;
+    ctx.strokeStyle = state.zoneActive ? PALETTES[settings.paletteIdx].zone : PALETTES[settings.paletteIdx].accent;
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  const pal = PALETTES[settings.paletteIdx];
+  const g = ctx.createRadialGradient(W / 2, H / 2, 80, W / 2, H / 2, Math.max(W, H) * 0.8);
+  if (isMonoTheme()) {
+    g.addColorStop(0, shadeHex(pal.accent, -0.82));
+    g.addColorStop(0.6, shadeHex(pal.accent, -0.92));
+    g.addColorStop(1, '#030306');
+  } else if (state.zoneActive) {
+    g.addColorStop(0, '#260b42');
+    g.addColorStop(0.55, '#110422');
+    g.addColorStop(1, '#040108');
+  } else {
+    g.addColorStop(0, '#0d1628');
+    g.addColorStop(0.6, '#070a14');
+    g.addColorStop(1, '#04040a');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.globalAlpha = state.zoneActive ? 0.055 : 0.03;
+  ctx.strokeStyle = state.zoneActive ? pal.zone : (isMonoTheme() ? pal.accent : '#7fb0ff');
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawPieceAt(type, rot, px, py, ghost) {
+  const cells = ROTATIONS[type][rot];
+  const color = SHAPES[type].color;
+  for (const [cx, cy] of cells) {
+    const x = px + cx, y = py + cy;
+    if (y <= -1) continue;
+    drawBlock(BOARD_X + x * CELL, BOARD_Y + y * CELL, CELL, color, ghost);
+  }
+}
+
+function ghostY(c) {
+  let y = c.y;
+  while (!collides(c.type, c.rot, c.x, y + 1)) y++;
+  return y;
+}
+
+function drawMini(type, bx, by, bw, bh, scale = 1) {
+  const cells = ROTATIONS[type][0];
+  let minX = 9, maxX = -9, minY = 9, maxY = -9;
+  for (const [x, y] of cells) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  const w = maxX - minX + 1, h = maxY - minY + 1;
+  const s = Math.min(bw / (w + 0.7), bh / (h + 0.7), 26) * scale;
+  const ox = bx + (bw - w * s) / 2 - minX * s;
+  const oy = by + (bh - h * s) / 2 - minY * s;
+  for (const [x, y] of cells) {
+    drawBlock(ox + x * s, oy + y * s, s, SHAPES[type].color);
+  }
+}
+
+function drawBoard() {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  roundRect(BOARD_X - 7, BOARD_Y - 7, BOARD_W + 14, BOARD_H + 14, bw ? 3 : 10);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(8,10,20,0.92)';
+  ctx.fill();
+  ctx.strokeStyle = bw
+    ? '#ffffff'
+    : (state.zoneActive ? pal.zone : (settings.oled || isMonoTheme() ? pal.accent : 'rgba(110,160,255,0.35)'));
+  ctx.lineWidth = (settings.oled || bw) ? 2.2 : 2;
+  if (state.zoneActive && !bw) { ctx.shadowColor = pal.zone; ctx.shadowBlur = 20; }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(BOARD_X, BOARD_Y, BOARD_W, BOARD_H);
+  ctx.clip();
+
+  if (!bw) {
+    ctx.strokeStyle = settings.oled ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.035)';
+    ctx.lineWidth = 1;
+    for (let x = 1; x < COLS; x++) {
+      ctx.beginPath();
+      ctx.moveTo(BOARD_X + x * CELL, BOARD_Y);
+      ctx.lineTo(BOARD_X + x * CELL, BOARD_Y + BOARD_H);
+      ctx.stroke();
+    }
+    for (let y = 1; y < ROWS; y++) {
+      ctx.beginPath();
+      ctx.moveTo(BOARD_X, BOARD_Y + y * CELL);
+      ctx.lineTo(BOARD_X + BOARD_W, BOARD_Y + y * CELL);
+      ctx.stroke();
+    }
+  }
+
+  let firstZRow = ROWS;
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const t = state.board[y][x];
+      if (t) {
+        if (t === 'Z') {
+          if (y < firstZRow) firstZRow = y;
+          drawFocusBlock(BOARD_X + x * CELL, BOARD_Y + y * CELL, CELL);
+        } else {
+          drawBlock(BOARD_X + x * CELL, BOARD_Y + y * CELL, CELL, SHAPES[t].color);
+        }
+      }
+    }
+  }
+
+  if (state.dropTrail && !bw) {
+    const tr = state.dropTrail;
+    const cells = ROTATIONS[tr.type][tr.rot];
+    const color = SHAPES[tr.type].color;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, tr.alpha * 0.35);
+    ctx.fillStyle = color;
+    for (const [cx, cy] of cells) {
+      const x = BOARD_X + (tr.x + cx) * CELL + 3;
+      const topY = BOARD_Y + Math.max(0, tr.fromY + cy) * CELL;
+      const botY = BOARD_Y + (tr.toY + cy) * CELL;
+      if (botY > topY) {
+        ctx.fillRect(x, topY, CELL - 6, botY - topY);
+      }
+    }
+    ctx.restore();
+  }
+
+  if (state.zoneActive && state.zoneLines > 0 && firstZRow < ROWS) {
+    const stackTopY = BOARD_Y + firstZRow * CELL;
+    ctx.save();
+    ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+    ctx.lineWidth = 2.5;
+    if (!bw) {
+      ctx.shadowColor = pal.accent;
+      ctx.shadowBlur = 12;
+    }
+    ctx.beginPath();
+    ctx.moveTo(BOARD_X, stackTopY);
+    ctx.lineTo(BOARD_X + BOARD_W, stackTopY);
+    ctx.stroke();
+
+    const stackCenterY = stackTopY + ((ROWS - firstZRow) * CELL) / 2;
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${isPortrait ? 13 : 15}px system-ui, sans-serif`;
+    ctx.fillStyle = '#ffffff';
+    if (!bw) {
+      ctx.shadowColor = pal.zone;
+      ctx.shadowBlur = 10;
+    }
+    const zTitle = getZoneTitle(state.zoneLines);
+    ctx.fillText(`${state.zoneLines} LINE${state.zoneLines === 1 ? '' : 'S'}  ·  ${zTitle}`, BOARD_X + BOARD_W / 2, stackCenterY + 5);
+    ctx.restore();
+  }
+
+  if (state.cur && state.phase !== 'gameover') {
+    const gy = ghostY(state.cur);
+    const vx = state.visualX ?? state.cur.x;
+    const vy = state.visualY ?? state.cur.y;
+    if (gy > vy + 0.05) {
+      drawPieceAt(state.cur.type, state.cur.rot, state.cur.x, gy, true);
+    }
+    drawPieceAt(state.cur.type, state.cur.rot, vx, vy, false);
+  }
+
+  ctx.restore();
+
+  if (state.flash > 0 && !bw) {
+    ctx.save();
+    ctx.globalAlpha = state.flash * 0.3;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(BOARD_X, BOARD_Y, BOARD_W, BOARD_H);
+    ctx.restore();
+  }
+}
+
+function drawHoldPanel() {
+  const bw = isBwTheme();
+  const pal = PALETTES[settings.paletteIdx];
+  const w = isPortrait ? 78 : 138;
+  const h = isPortrait ? 72 : 94;
+  const x = isPortrait ? (BOARD_X - w - 12) : (BOARD_X - w - 20);
+  const y = BOARD_Y + 18;
+
+  ctx.textAlign = 'left';
+  ctx.font = '700 12px system-ui, sans-serif';
+  ctx.fillStyle = bw ? '#ffffff' : (isMonoTheme() ? pal.accent : 'rgba(180,210,255,0.65)');
+  ctx.fillText('HOLD', x, y - 7);
+
+  roundRect(x, y, w, h, bw ? 3 : 10);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(255,255,255,0.035)';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : (settings.oled ? 'rgba(255,255,255,0.28)' : 'rgba(120,160,255,0.18)');
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  if (state.hold) {
+    ctx.save();
+    if (!state.canHold && !bw) ctx.globalAlpha = 0.3;
+    drawMini(state.hold, x, y, w, h, isPortrait ? 0.78 : 0.95);
+    ctx.restore();
+  }
+}
+
+function drawNextPanel() {
+  const bw = isBwTheme();
+  const pal = PALETTES[settings.paletteIdx];
+  const x = isPortrait ? (BOARD_X + BOARD_W + 12) : (BOARD_X + BOARD_W + 20);
+  const startY = BOARD_Y + 18;
+  const w = isPortrait ? 78 : 138;
+  const firstH = isPortrait ? 56 : 62;
+  const smallH = isPortrait ? 40 : 44;
+  const smallW = Math.round(w * 0.82);
+
+  ctx.textAlign = 'left';
+  ctx.font = '700 12px system-ui, sans-serif';
+  ctx.fillStyle = bw ? '#ffffff' : (isMonoTheme() ? pal.accent : 'rgba(180,210,255,0.65)');
+  ctx.fillText('NEXT', x, startY - 7);
+
+  let curY = startY;
+  for (let i = 0; i < CONFIG.previewCount; i++) {
+    const isFirst = i === 0;
+    const boxW = isFirst ? w : smallW;
+    const boxH = isFirst ? firstH : smallH;
+    const boxX = isFirst ? x : x + Math.floor((w - boxW) / 2);
+    const boxAlpha = isFirst ? 1 : Math.max(0.22, 0.56 - (i - 1) * 0.1);
+    const pieceAlpha = isFirst ? 1 : Math.max(0.2, 0.5 - (i - 1) * 0.09);
+    const pieceScale = isPortrait
+      ? (isFirst ? 0.78 : 0.46)
+      : (isFirst ? 0.95 : 0.58);
+
+    ctx.save();
+    if (!bw) ctx.globalAlpha = boxAlpha;
+    roundRect(boxX, curY, boxW, boxH, bw ? 3 : (isFirst ? 10 : 8));
+    ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(255,255,255,0.035)';
+    ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : (settings.oled ? 'rgba(255,255,255,0.25)' : 'rgba(120,160,255,0.16)');
+    ctx.lineWidth = isFirst ? 1.5 : 1.1;
+    ctx.stroke();
+    ctx.restore();
+
+    if (state.nextQueue[i]) {
+      ctx.save();
+      if (!bw) ctx.globalAlpha = pieceAlpha;
+      drawMini(state.nextQueue[i], boxX, curY, boxW, boxH, pieceScale);
+      ctx.restore();
+    }
+
+    curY += boxH + (isFirst ? 9 : 6);
+  }
+}
+
+/* Computes the Focus gauge position and size. The gauge starts at its canonical
+   size/position, then shrinks / shifts only as much as needed to avoid:
+     - clipping the right or bottom edge of the screen;
+     - overlapping any visible touch-control button (which would normally sit
+       below / beside the gauge). */
+function computeFocusGaugeBounds() {
+  const margin = 8;       // minimum gap from screen edges
+  const labelPad = 44;    // reserved space below gauge for its timer/lines readouts
+  const minH = 60;        // never shrink below this
+
+  const touchShown =
+    isTouchVisible() &&
+    (state.phase === 'playing' || state.phase === 'countdown') &&
+    !settingsOpen && !highScoresOpen;
+
+  if (isPortrait) {
+    const holdW = 78;
+    const holdX = BOARD_X - holdW - 12;
+    const w = 30;
+    let x = holdX + Math.floor((holdW - w) / 2);
+    const y = BOARD_Y + 114;
+    let h = Math.min(220, BOARD_H - 150);
+
+    // --- screen-edge clamps ---
+    if (x < margin) x = margin;
+    if (x + w > W - margin) x = W - margin - w;
+
+    const maxBottom = H - margin - labelPad;
+    if (y + h > maxBottom) h = Math.max(minH, maxBottom - y);
+
+    // --- touch-control clamps: shrink height so gauge+labels clear them ---
+    if (touchShown) {
+      const defs = computeTouchButtonDefs();
+      for (const b of defs) {
+        if (b.x < x + w && b.x + b.w > x) {
+          if (b.y + b.h <= y) continue;
+          const safeBottom = b.y - margin - labelPad;
+          if (y + h > safeBottom) h = Math.max(minH, safeBottom - y);
+        }
+      }
+    }
+
+    return { x, y, w, h };
+  }
+
+  // Landscape
+  const nextX = BOARD_X + BOARD_W + 20;
+  const w = 36;
+  let x = nextX + 138 + 16;
+  const y = BOARD_Y + 18;
+  let h = BOARD_H - 54;
+
+  // --- screen-edge clamps ---
+  if (x + w > W - margin) x = W - margin - w;
+
+  const maxBottom = H - margin - labelPad;
+  if (y + h > maxBottom) h = Math.max(minH, maxBottom - y);
+
+  // --- touch-control clamps ---
+  if (touchShown) {
+    const defs = computeTouchButtonDefs();
+    for (const b of defs) {
+      if (b.x < x + w && b.x + b.w > x) {
+        if (b.y + b.h <= y) continue;
+        const safeBottom = b.y - margin - labelPad;
+        if (y + h > safeBottom) h = Math.max(minH, safeBottom - y);
+      }
+    }
+  }
+
+  return { x, y, w, h };
+}
+
+function drawFocusGauge() {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+
+  if (isPortrait) {
+    // Clear vertical mini Focus gauge below HOLD panel on the left side of the board.
+    // computeFocusGaugeBounds() adapts x/y/w/h so it never clips the screen or
+    // any visible touch controls.
+    const { x, y, w, h } = computeFocusGaugeBounds();
+
+    ctx.textAlign = 'center';
+    ctx.font = '700 10px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : (state.zoneActive ? pal.zone : 'rgba(180,210,255,0.75)');
+    ctx.fillText('FOCUS', x + w / 2, y - 6);
+
+    roundRect(x, y, w, h, bw ? 3 : 9);
+    ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(255,255,255,0.04)';
+    ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : (settings.oled ? 'rgba(255,255,255,0.3)' : 'rgba(120,160,255,0.25)');
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    const pct = Math.max(0, Math.min(1, state.zone / 100));
+    const innerH = h - 8;
+    const fh = innerH * pct;
+    if (fh > 0) {
+      ctx.save();
+      roundRect(x + 4, y + 4, w - 8, innerH, bw ? 1 : 6);
+      ctx.clip();
+      if (bw) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y + 4 + (innerH - fh), w, fh);
+      } else {
+        const g = ctx.createLinearGradient(x, y + h, x, y);
+        if (state.zoneActive) {
+          g.addColorStop(0, '#ff2e88');
+          g.addColorStop(0.5, pal.zone);
+          g.addColorStop(1, pal.accent);
+        } else {
+          g.addColorStop(0, pal.secondary);
+          g.addColorStop(1, pal.accent);
+        }
+        ctx.fillStyle = g;
+        ctx.fillRect(x, y + 4 + (innerH - fh), w, fh);
+      }
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.strokeStyle = bw ? '#000000' : 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.2;
+    for (let i = 1; i <= 3; i++) {
+      const qy = y + 4 + (innerH / 4) * i;
+      ctx.beginPath();
+      ctx.moveTo(x + 3, qy);
+      ctx.lineTo(x + w - 3, qy);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const quarters = Math.floor(state.zone / 25);
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = '700 10px ui-monospace, monospace';
+    if (state.zoneActive) {
+      ctx.fillStyle = bw ? '#ffffff' : '#ff88e8';
+      ctx.fillText(state.zoneTimer.toFixed(1) + 's', x + w / 2, y + h + 14);
+      ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+      ctx.fillText(state.zoneLines + ' LN', x + w / 2, y + h + 26);
+    } else {
+      ctx.fillStyle = bw ? '#ffffff' : (quarters > 0 ? pal.accent : 'rgba(150,180,230,0.5)');
+      ctx.fillText(`${quarters}/4`, x + w / 2, y + h + 14);
+      if (quarters >= 1) {
+        ctx.font = '800 9px system-ui, sans-serif';
+        ctx.fillStyle = bw ? '#ffffff' : (quarters >= 4 ? '#ffe66e' : pal.accent);
+        ctx.fillText(quarters >= 4 ? 'MAX!' : 'READY', x + w / 2, y + h + 26);
+      }
+    }
+    ctx.restore();
+    return;
+  }
+
+  // Standard vertical Focus gauge for Landscape mode.
+  // computeFocusGaugeBounds() adapts x/y/w/h so it never clips the screen or
+  // any visible touch controls.
+  const { x, y, w, h } = computeFocusGaugeBounds();
+
+  ctx.textAlign = 'center';
+  ctx.font = '700 12px system-ui, sans-serif';
+  ctx.fillStyle = bw ? '#ffffff' : (state.zoneActive ? pal.zone : 'rgba(180,210,255,0.65)');
+  ctx.fillText('FOCUS', x + w / 2, y - 8);
+
+  roundRect(x, y, w, h, bw ? 3 : 12);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(255,255,255,0.04)';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : (settings.oled ? 'rgba(255,255,255,0.3)' : 'rgba(120,160,255,0.2)');
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const pct = Math.max(0, Math.min(1, state.zone / 100));
+  const innerH = h - 10;
+  const fh = innerH * pct;
+  if (fh > 0) {
+    ctx.save();
+    roundRect(x + 5, y + 5, w - 10, innerH, bw ? 1 : 8);
+    ctx.clip();
+    if (bw) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y + 5 + (innerH - fh), w, fh);
+    } else {
+      const g = ctx.createLinearGradient(x, y + h, x, y);
+      if (state.zoneActive) {
+        g.addColorStop(0, isMonoTheme() ? shadeHex(pal.accent, -0.3) : '#ff2e88');
+        g.addColorStop(0.5, pal.zone);
+        g.addColorStop(1, pal.accent);
+      } else if (state.zone >= 100) {
+        g.addColorStop(0, isMonoTheme() ? shadeHex(pal.accent, -0.2) : '#ff9f2e');
+        g.addColorStop(0.5, isMonoTheme() ? shadeHex(pal.accent, 0.2) : '#ffe14a');
+        g.addColorStop(1, pal.accent);
+      } else {
+        g.addColorStop(0, pal.secondary);
+        g.addColorStop(1, pal.accent);
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(x, y + 5 + (innerH - fh), w, fh);
+
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y + 5 + (innerH - fh), w, 3);
+    }
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = bw ? '#000000' : 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1.5;
+  for (let i = 1; i <= 3; i++) {
+    const qy = y + 5 + (innerH / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(x + 3, qy);
+    ctx.lineTo(x + w - 3, qy);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const quarters = Math.floor(state.zone / 25);
+
+  if (!state.zoneActive) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = '700 11px ui-monospace, monospace';
+    ctx.fillStyle = bw ? '#ffffff' : (quarters > 0 ? pal.accent : 'rgba(150,180,230,0.45)');
+    ctx.fillText(`${quarters}/4`, x + w / 2, y + h + 16);
+    ctx.restore();
+  }
+
+  if (state.zone >= 25 && !state.zoneActive) {
+    const isMax = state.zone >= 100;
+    const pulse = 0.5 + 0.5 * Math.sin(uiTime * (isMax ? 7.5 : 5.5));
+    if (!bw) {
+      ctx.save();
+      ctx.shadowColor = isMax ? '#ffd93d' : pal.accent;
+      ctx.shadowBlur = 12 + pulse * 18;
+      roundRect(x, y, w, h, 12);
+      ctx.strokeStyle = isMax
+        ? `rgba(255,217,61,${0.55 + pulse * 0.45})`
+        : pal.accent;
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = '800 10px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : (isMax ? '#ffe66e' : pal.accent);
+    ctx.fillText(isMax ? 'MAX!' : 'READY', x + w / 2, y + h + 30);
+    ctx.restore();
+  }
+
+  if (state.zoneActive) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = '700 11px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : '#ff88e8';
+    ctx.fillText(state.zoneTimer.toFixed(1) + 's', x + w / 2, y + h + 16);
+    ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+    ctx.fillText(state.zoneLines + ' LN', x + w / 2, y + h + 31);
+    ctx.restore();
+  }
+}
+
+function drawHudTopButtons() {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  ctx.save();
+  ctx.textAlign = 'right';
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(160,195,255,0.45)';
+  ctx.fillText(`${Math.round(fpsSmooth)} HZ`, W - 16, H - 10);
+  ctx.restore();
+
+  const btnW = 40, btnH = 36;
+  const gearX = W - 16 - btnW;
+  const gearY = 14;
+  const isGearHover = hoverBtnId === 'hud_settings';
+  roundRect(gearX, gearY, btnW, btnH, bw ? 3 : 8);
+  ctx.fillStyle = bw
+    ? (isGearHover ? '#ffffff' : '#000000')
+    : (isGearHover ? 'rgba(120,170,255,0.22)' : (settings.oled ? '#08080e' : 'rgba(20,28,52,0.85)'));
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : (isGearHover ? pal.accent : 'rgba(140,180,255,0.35)');
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.font = '900 22px system-ui, sans-serif';
+  ctx.fillStyle = (bw && isGearHover) ? '#000000' : '#e6efff';
+  ctx.fillText('⚙', gearX + btnW / 2, gearY + 25);
+
+  registerButton('hud_settings', gearX, gearY, btnW, btnH, () => {
+    if (state.phase === 'playing') state.phase = 'paused';
+    if (settingsOpen) cancelSettingsModal();
+    else openSettingsModal();
+  });
+
+  if (state.phase === 'playing' || state.phase === 'paused') {
+    const pauseX = gearX - btnW - 8;
+    const isPauseHover = hoverBtnId === 'hud_pause';
+    roundRect(pauseX, gearY, btnW, btnH, bw ? 3 : 8);
+    ctx.fillStyle = bw
+      ? (isPauseHover ? '#ffffff' : '#000000')
+      : (isPauseHover ? 'rgba(120,170,255,0.22)' : (settings.oled ? '#08080e' : 'rgba(20,28,52,0.85)'));
+    ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : (isPauseHover ? pal.accent : 'rgba(140,180,255,0.35)');
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    ctx.font = '900 16px system-ui, sans-serif';
+    ctx.fillStyle = (bw && isPauseHover) ? '#000000' : '#e6efff';
+    ctx.fillText(state.phase === 'paused' ? '▶' : '❚❚', pauseX + btnW / 2, gearY + 24);
+
+    registerButton('hud_pause', pauseX, gearY, btnW, btnH, () => {
+      if (settingsOpen) { cancelSettingsModal(); return; }
+      if (state.phase === 'playing') { state.phase = 'paused'; pauseFocus = 0; }
+      else if (state.phase === 'paused') state.phase = 'playing';
+    });
+  }
+}
+
+function drawStats() {
+  const bw = isBwTheme();
+  const pal = PALETTES[settings.paletteIdx];
+  const activeGoal = isRunActive() ? state.lineGoal : lineGoal;
+
+  if (isPortrait) {
+    let bx = BOARD_X;
+    const by = BOARD_Y + BOARD_H + 10;
+    if (state.combo > 0) {
+      roundRect(bx, by, 106, 22, bw ? 2 : 6);
+      ctx.fillStyle = bw ? '#000000' : 'rgba(255,180,60,0.16)';
+      ctx.fill();
+      ctx.strokeStyle = bw ? '#ffffff' : 'rgba(255,190,80,0.5)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.font = '700 11px system-ui, sans-serif';
+      ctx.fillStyle = bw ? '#ffffff' : '#ffc857';
+      ctx.fillText(`COMBO ×${state.combo + 1}`, bx + 8, by + 15);
+      bx += 114;
+    }
+    if (state.b2b) {
+      roundRect(bx, by, 116, 22, bw ? 2 : 6);
+      ctx.fillStyle = bw ? '#000000' : 'rgba(200,90,255,0.16)';
+      ctx.fill();
+      ctx.strokeStyle = bw ? '#ffffff' : 'rgba(210,120,255,0.5)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.font = '700 11px system-ui, sans-serif';
+      ctx.fillStyle = bw ? '#ffffff' : '#d68cff';
+      ctx.fillText('BACK-TO-BACK', bx + 8, by + 15);
+    }
+    return;
+  }
+
+  const x = BOARD_X - 138 - 20;
+  ctx.textAlign = 'left';
+
+  const items = zenMode
+    ? [
+        ['ZEN MODE', 'UNRANKED'],
+        ['LEVEL', secretSuperSpeedMode ? `${CONFIG.levelCap} (MAX)` : String(state.level)],
+        ['LINES', endlessMode ? String(state.lines) : `${state.lines} / ${activeGoal}`],
+      ]
+    : [
+        ['SCORE', state.score.toLocaleString()],
+        ['LEVEL', secretSuperSpeedMode ? `${CONFIG.levelCap} (MAX)` : String(state.level)],
+        ['LINES', endlessMode ? String(state.lines) : `${state.lines} / ${activeGoal}`],
+        ['TIME', formatTime(state.time)],
+      ];
+  let y = BOARD_Y + 148;
+  for (const [label, value] of items) {
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : (isMonoTheme() ? pal.accent : 'rgba(160,190,255,0.5)');
+    ctx.fillText(label, x, y);
+    ctx.font = '700 20px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillStyle = bw ? '#ffffff' : '#e6efff';
+    ctx.fillText(value, x, y + 22);
+    y += 50;
+  }
+
+  let by = y + 2;
+  if (state.combo > 0) {
+    roundRect(x, by, 132, 26, bw ? 2 : 6);
+    ctx.fillStyle = bw ? '#000000' : 'rgba(255,180,60,0.14)';
+    ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : 'rgba(255,190,80,0.45)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.font = '700 12px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : '#ffc857';
+    ctx.fillText(`COMBO ×${state.combo + 1}`, x + 10, by + 17);
+    by += 32;
+  }
+  if (state.b2b) {
+    roundRect(x, by, 132, 26, bw ? 2 : 6);
+    ctx.fillStyle = bw ? '#000000' : 'rgba(200,90,255,0.14)';
+    ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : 'rgba(210,120,255,0.45)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.font = '700 12px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : '#d68cff';
+    ctx.fillText('BACK-TO-BACK', x + 10, by + 17);
+  }
+
+  if (!isTouchVisible()) {
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillStyle = bw ? '#ffffff' : 'rgba(150,180,230,0.42)';
+    const hints = lastInputDevice === 'gamepad'
+      ? [
+          'L-STICK/DPAD MOVE',
+          'DOWN         SOFT DROP',
+          'UP           HARD DROP',
+          'B / A        ROT CW/CCW',
+          'LB / RB      HOLD',
+          ...(CONFIG.zoneEnabled ? ['LT / RT      FOCUS'] : []),
+          'START        PAUSE',
+          'SELECT       RESTART',
+        ]
+      : [
+          '← →   MOVE',
+          '↓     SOFT DROP',
+          '↑ / X ROTATE CW',
+          'Z     ROTATE CCW',
+          'SPACE HARD DROP',
+          'C     HOLD',
+          ...(CONFIG.zoneEnabled ? ['Q / E FOCUS'] : []),
+          'P     PAUSE',
+        ];
+    let hy = BOARD_Y + BOARD_H - 108;
+    for (const h of hints) {
+      ctx.fillText(h, x, hy);
+      hy += 14;
+    }
+  }
+}
+
+function drawPortraitTopStatsBar() {
+  if (!isPortrait) return;
+  const bw = isBwTheme();
+  const activeGoal = isRunActive() ? state.lineGoal : lineGoal;
+  const linesValue = endlessMode
+    ? String(state.lines)
+    : `${state.lines}/${activeGoal}`;
+  const lvlText = secretSuperSpeedMode ? `${CONFIG.levelCap} MAX` : String(state.level);
+  const items = zenMode
+    ? [
+        ['MODE', 'ZEN', 14],
+        ['LEVEL', lvlText, 130],
+        ['LINES', linesValue, 220],
+      ]
+    : [
+        ['SCORE', state.score.toLocaleString(), 14],
+        ['LEVEL', lvlText, 144],
+        ['LINES', linesValue, 214],
+        ['TIME', formatTime(state.time), 322],
+      ];
+  for (const [label, value, ix] of items) {
+    ctx.textAlign = 'left';
+    ctx.font = '700 10px system-ui, sans-serif';
+    ctx.fillStyle = bw ? '#ffffff' : 'rgba(160,195,255,0.55)';
+    ctx.fillText(label, ix, 24);
+    ctx.font = '700 16px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillStyle = bw ? '#ffffff' : '#e6efff';
+    ctx.fillText(value, ix, 44);
+  }
+}
+
+/* Computes the touch button layout (positions + metadata) without drawing.
+   Used by drawTouchControls() and by computeFocusGaugeBounds() so the Focus
+   gauge can avoid overlapping any visible touch controls. */
+function computeTouchButtonDefs() {
+  const focusReady = state.zone >= 25 || state.zoneActive;
+  const m = getTouchLayoutMetrics();
+  const layout = settings.touchLayout || 'default';
+  const buttons = [];
+
+  if (isPortrait) {
+    if (layout === 'split') {
+      buttons.push(
+        { id: 'hold', label: 'HOLD', sub: 'SWAP', x: m.leftClusterX, y: m.topY, w: m.clusterW, h: m.row1H, action: 'hold' },
+        CONFIG.zoneEnabled ? { id: 'zone', label: state.zoneActive ? 'END' : 'FOCUS', sub: `${Math.floor(state.zone / 25)}/4`, x: m.rightClusterX, y: m.topY, w: m.clusterW, h: m.row1H, action: 'zone', glow: focusReady } : null
+      );
+      const row2Y = m.topY + m.row1H + 8;
+      const row3Y = row2Y + m.dpadH + 8;
+      buttons.push(
+        { id: 'left',  label: '◀', sub: 'LEFT',  x: m.leftClusterX,              y: row2Y, w: m.btnW, h: m.dpadH, hold: 'left' },
+        { id: 'right', label: '▶', sub: 'RIGHT', x: m.leftClusterX + m.btnW + 8, y: row2Y, w: m.btnW, h: m.dpadH, hold: 'right' },
+        { id: 'down',  label: '▼', sub: 'SOFT',  x: m.leftClusterX,              y: row3Y, w: m.btnW, h: m.dpadH, hold: 'down' },
+        { id: 'drop',  label: '⤓', sub: 'DROP',  x: m.leftClusterX + m.btnW + 8, y: row3Y, w: m.btnW, h: m.dpadH, action: 'drop' }
+      );
+      buttons.push(
+        { id: 'ccw', label: '↺', sub: 'CCW', x: m.rightClusterX,              y: row2Y, w: m.btnW, h: m.rotH, action: 'ccw' },
+        { id: 'cw',  label: '↻', sub: 'CW',  x: m.rightClusterX + m.btnW + 8, y: row2Y, w: m.btnW, h: m.rotH, action: 'cw' }
+      );
+    } else if (layout === 'compact') {
+      const topY = m.topY;
+      const btnW = m.btnW;
+      buttons.push(
+        { id: 'left',  label: '◀', sub: 'LEFT', x: m.sideMargin,               y: topY, w: btnW, h: m.dpadH, hold: 'left' },
+        { id: 'right', label: '▶', sub: 'RIGHT',x: m.sideMargin + btnW + 4,    y: topY, w: btnW, h: m.dpadH, hold: 'right' },
+        { id: 'down',  label: '▼', sub: 'SOFT', x: m.sideMargin + (btnW+4)*2,  y: topY, w: btnW, h: m.dpadH, hold: 'down' },
+        { id: 'drop',  label: '⤓', sub: 'DROP', x: m.sideMargin + (btnW+4)*3,  y: topY, w: btnW, h: m.dpadH, action: 'drop' }
+      );
+      const row2Y = topY + m.dpadH + 8;
+      const halfW = Math.floor((m.clusterW - 8) / 4);
+      buttons.push(
+        { id: 'hold', label: 'HOLD', sub: 'SWAP', x: m.sideMargin,               y: row2Y, w: halfW * 2, h: m.row1H, action: 'hold' },
+        { id: 'ccw',  label: '↺',  sub: 'CCW',  x: m.sideMargin + halfW * 2 + 8, y: row2Y, w: halfW,     h: m.row1H, action: 'ccw' },
+        { id: 'cw',   label: '↻',  sub: 'CW',   x: m.sideMargin + halfW * 3 + 8, y: row2Y, w: halfW,     h: m.row1H, action: 'cw' }
+      );
+    } else {
+      buttons.push(
+        { id: 'hold', label: 'HOLD', sub: 'SWAP PIECE', x: m.sideMargin, y: m.topY, w: m.clusterW, h: m.row1H, action: 'hold' },
+        CONFIG.zoneEnabled ? { id: 'zone', label: state.zoneActive ? 'END FOCUS' : 'FOCUS', sub: `${Math.floor(state.zone / 25)}/4 CHARGE`, x: m.rightClusterX, y: m.topY, w: m.clusterW, h: m.row1H, action: 'zone', glow: focusReady } : null
+      );
+      const row2Y = m.topY + m.row1H + 10;
+      const row3Y = row2Y + m.dpadH + 10;
+      buttons.push(
+        { id: 'left',  label: '◀', sub: 'LEFT',  x: m.sideMargin,              y: row2Y, w: m.btnW, h: m.dpadH, hold: 'left' },
+        { id: 'right', label: '▶', sub: 'RIGHT', x: m.sideMargin + m.btnW + 10, y: row2Y, w: m.btnW, h: m.dpadH, hold: 'right' },
+        { id: 'down',  label: '▼', sub: 'SOFT',  x: m.sideMargin,              y: row3Y, w: m.btnW, h: m.dpadH, hold: 'down' },
+        { id: 'drop',  label: '⤓', sub: 'DROP',  x: m.sideMargin + m.btnW + 10, y: row3Y, w: m.btnW, h: m.dpadH, action: 'drop' }
+      );
+      buttons.push(
+        { id: 'ccw', label: '↺', sub: 'ROT CCW', x: m.rightClusterX,              y: row2Y, w: m.btnW, h: m.rotH, action: 'ccw' },
+        { id: 'cw',  label: '↻', sub: 'ROT CW',  x: m.rightClusterX + m.btnW + 10, y: row2Y, w: m.btnW, h: m.rotH, action: 'cw' }
+      );
+    }
+  } else {
+    const row2Y = m.baseY + m.row1H + 8;
+    const row3Y = row2Y + m.dpadH + 8;
+    buttons.push(
+      { id: 'hold',  label: 'HOLD', sub: 'LEFT SIDE', x: m.leftX, y: m.baseY, w: m.clusterW, h: m.row1H, action: 'hold' },
+      { id: 'left',  label: '◀', sub: 'LEFT',  x: m.leftX,             y: row2Y, w: m.btnW, h: m.dpadH, hold: 'left' },
+      { id: 'right', label: '▶', sub: 'RIGHT', x: m.leftX + m.btnW + 8, y: row2Y, w: m.btnW, h: m.dpadH, hold: 'right' },
+      { id: 'down',  label: '▼', sub: 'SOFT',  x: m.leftX,             y: row3Y, w: m.btnW, h: m.dpadH, hold: 'down' },
+      { id: 'drop',  label: '⤓', sub: 'DROP',  x: m.leftX + m.btnW + 8, y: row3Y, w: m.btnW, h: m.dpadH, action: 'drop' },
+      CONFIG.zoneEnabled ? { id: 'zone',  label: state.zoneActive ? 'END FOCUS' : 'FOCUS', sub: `${Math.floor(state.zone / 25)}/4`, x: m.rightX, y: m.baseY, w: m.clusterW, h: m.row1H, action: 'zone', glow: focusReady } : null,
+      { id: 'ccw',   label: '↺', sub: 'ROT CCW', x: m.rightX,             y: row2Y, w: m.btnW, h: m.rotH, action: 'ccw' },
+      { id: 'cw',    label: '↻', sub: 'ROT CW',  x: m.rightX + m.btnW + 8, y: row2Y, w: m.btnW, h: m.rotH, action: 'cw' }
+    );
+  }
+
+  const filtered = buttons.filter(Boolean);
+
+  // Apply custom saved positions (normalized 0..1 coordinates) if present
+  const orientKey = isPortrait ? 'portrait' : 'landscape';
+  const savedMap = (customTouchPositions && customTouchPositions[orientKey]) || {};
+  for (const b of filtered) {
+    if (savedMap[b.id]) {
+      b.x = Math.max(4, Math.min(W - b.w - 4, Math.round(savedMap[b.id].nx * W)));
+      b.y = Math.max(4, Math.min(H - b.h - 4, Math.round(savedMap[b.id].ny * H)));
+    }
+  }
+  return filtered;
+}
+
+function drawTouchControls() {
+  touchPadButtons = [];
+  if (!isTouchVisible() && !touchEditorOpen) return;
+  if (!touchEditorOpen && state.phase !== 'playing' && state.phase !== 'countdown') return;
+  if (!touchEditorOpen && (settingsOpen || highScoresOpen)) return;
+
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  touchPadButtons = computeTouchButtonDefs();
+
+  for (const b of touchPadButtons) {
+    const isActive = (b.hold && touchHeld[b.hold]) || hoverBtnId === `touch_${b.id}` || draggingTouchBtnId === b.id;
+    ctx.save();
+    roundRect(b.x, b.y, b.w, b.h, bw ? 3 : 14);
+    if (bw) {
+      ctx.fillStyle = isActive ? '#ffffff' : '#000000';
+      ctx.fill();
+      ctx.lineWidth = isActive ? 2.5 : 1.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    } else {
+      if (b.glow) {
+        ctx.fillStyle = isActive ? 'rgba(200,90,255,0.42)' : 'rgba(160,60,255,0.22)';
+        ctx.shadowColor = pal.zone;
+        ctx.shadowBlur = 14;
+      } else {
+        ctx.fillStyle = isActive
+          ? 'rgba(90,165,255,0.34)'
+          : (settings.oled ? 'rgba(14,18,30,0.92)' : 'rgba(20,30,58,0.75)');
+      }
+      ctx.fill();
+      ctx.lineWidth = isActive ? 2.4 : 1.6;
+      ctx.strokeStyle = b.glow
+        ? pal.zone
+        : (isActive ? pal.accent : 'rgba(140,185,255,0.35)');
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${b.label.length > 3 ? 14 : 26}px system-ui, sans-serif`;
+    ctx.fillStyle = (bw && isActive) ? '#000000' : '#f0f6ff';
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + (b.sub ? 0 : 8));
+
+    if (b.sub) {
+      ctx.font = '700 9px ui-monospace, monospace';
+      ctx.fillStyle = (bw && isActive) ? '#000000' : (bw ? '#ffffff' : 'rgba(175,205,255,0.65)');
+      ctx.fillText(touchEditorOpen ? 'DRAG ME' : b.sub, b.x + b.w / 2, b.y + b.h - 8);
+    }
+    ctx.restore();
+  }
+}
+
+function drawToast() {
+  if (!state.toast || state.toastTimer <= 0) return;
+  const bw = isBwTheme();
+  const pal = PALETTES[settings.paletteIdx];
+  const a = bw ? 1 : Math.min(1, state.toastTimer * 1.6);
+
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.font = '700 12px system-ui, sans-serif';
+  const textW = Math.ceil(ctx.measureText(state.toast).width);
+  const pillW = Math.max(132, textW + 24);
+  const pillH = 26;
+  const bx = BOARD_X + Math.floor((BOARD_W - pillW) / 2);
+  const by = Math.max(4, BOARD_Y - 7 - pillH - 6);
+
+  roundRect(bx, by, pillW, pillH, bw ? 2 : 6);
+  if (bw) {
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+  } else if (state.zoneActive) {
+    ctx.fillStyle = 'rgba(200,90,255,0.16)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(210,120,255,0.5)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = '#d68cff';
+  } else if (isMonoTheme()) {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fill();
+    ctx.strokeStyle = pal.accent;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = pal.accent;
+  } else {
+    ctx.fillStyle = 'rgba(255,180,60,0.16)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,190,80,0.5)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = '#ffc857';
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillText(state.toast, bx + pillW / 2, by + 17);
+  ctx.restore();
+}
+
+function drawButtonLabelWithBigIcon(label, centerX, baselineY, baseFontSize, color) {
+  const match = label.match(/^([↻↺⚙⌂▶🏆✓✕←])\s+(.+)$/);
+  if (!match) {
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${baseFontSize}px system-ui, sans-serif`;
+    ctx.fillStyle = color;
+    ctx.fillText(label, centerX, baselineY);
+    return;
+  }
+  const icon = match[1];
+  const rest = match[2];
+  const iconSize = baseFontSize + 6;
+  const gap = 8;
+
+  ctx.save();
+  ctx.font = `900 ${iconSize}px system-ui, sans-serif`;
+  const iconW = ctx.measureText(icon).width;
+  ctx.font = `800 ${baseFontSize}px system-ui, sans-serif`;
+  const textW = ctx.measureText(rest).width;
+  const totalW = iconW + gap + textW;
+  const startX = centerX - totalW / 2;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = color;
+  ctx.font = `900 ${iconSize}px system-ui, sans-serif`;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.9;
+  ctx.strokeText(icon, startX, baselineY + 2);
+  ctx.fillText(icon, startX, baselineY + 2);
+
+  ctx.font = `800 ${baseFontSize}px system-ui, sans-serif`;
+  ctx.fillText(rest, startX + iconW + gap, baselineY);
+  ctx.restore();
+}
+
+function drawPillButton(id, label, subLabel, x, y, w, h, active, primary, onClick, dpadFocused = false, disabled = false) {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  const hovered = !disabled && (hoverBtnId === id || dpadFocused);
+  ctx.save();
+  if (disabled && !bw) ctx.globalAlpha = 0.38;
+  roundRect(x, y, w, h, bw ? 3 : 12);
+
+  if (bw) {
+    const inv = primary || active || hovered;
+    ctx.fillStyle = inv ? '#ffffff' : '#000000';
+    ctx.fill();
+    ctx.lineWidth = dpadFocused ? 3 : 1.8;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+
+    const fg = inv ? '#000000' : '#ffffff';
+    drawButtonLabelWithBigIcon(label, x + w / 2, y + h / 2 + (subLabel ? -2 : 5), primary ? 17 : 14, fg);
+    if (subLabel) {
+      ctx.textAlign = 'center';
+      ctx.font = '600 10px ui-monospace, monospace';
+      ctx.fillStyle = fg;
+      ctx.fillText(subLabel, x + w / 2, y + h / 2 + 13);
+    }
+    if (dpadFocused) {
+      roundRect(x - 3, y - 3, w + 6, h + 6, 4);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.restore();
+    if (!disabled) registerButton(id, x, y, w, h, onClick);
+    return;
+  }
+
+  if (primary) {
+    const g = ctx.createLinearGradient(x, y, x + w, y + h);
+    g.addColorStop(0, pal.accent);
+    g.addColorStop(1, pal.secondary);
+    ctx.fillStyle = g;
+  } else if (active) {
+    ctx.fillStyle = settings.oled ? 'rgba(46,230,230,0.22)' : 'rgba(60,140,255,0.28)';
+  } else {
+    ctx.fillStyle = hovered
+      ? 'rgba(255,255,255,0.14)'
+      : (settings.oled ? '#090b12' : 'rgba(14,20,38,0.92)');
+  }
+  ctx.fill();
+
+  ctx.lineWidth = (active || primary || hovered) ? 2.4 : 1.5;
+  ctx.strokeStyle = dpadFocused
+    ? '#ffffff'
+    : (primary ? '#ffffff' : (active || hovered ? pal.accent : 'rgba(140,175,240,0.32)'));
+  ctx.stroke();
+
+  if (dpadFocused) {
+    roundRect(x - 3, y - 3, w + 6, h + 6, 14);
+    ctx.strokeStyle = pal.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  const labelColor = primary ? '#04060e' : (active ? '#ffffff' : 'rgba(210,228,255,0.92)');
+  drawButtonLabelWithBigIcon(label, x + w / 2, y + h / 2 + (subLabel ? -2 : 5), primary ? 17 : 14, labelColor);
+
+  if (subLabel) {
+    ctx.textAlign = 'center';
+    ctx.font = '600 10px ui-monospace, monospace';
+    ctx.fillStyle = primary ? 'rgba(4,6,14,0.8)' : (active ? pal.accent : 'rgba(155,185,235,0.6)');
+    ctx.fillText(subLabel, x + w / 2, y + h / 2 + 13);
+  }
+  ctx.restore();
+
+  if (!disabled) registerButton(id, x, y, w, h, onClick);
+}
+
+function drawGitHubLogo(cx, cy, r, color = '#ffffff') {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.08, r * 0.62, 0, Math.PI * 2);
+  ctx.fill();
+  // Cat ears
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.52, cy - r * 0.35);
+  ctx.lineTo(cx - r * 0.62, cy - r * 0.85);
+  ctx.lineTo(cx - r * 0.16, cy - r * 0.60);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + r * 0.52, cy - r * 0.35);
+  ctx.lineTo(cx + r * 0.62, cy - r * 0.85);
+  ctx.lineTo(cx + r * 0.16, cy - r * 0.60);
+  ctx.closePath();
+  ctx.fill();
+  // Torso base
+  roundRect(cx - r * 0.34, cy + r * 0.32, r * 0.68, r * 0.58, r * 0.2);
+  ctx.fill();
+  // Octocat tail
+  ctx.lineWidth = Math.max(1.8, r * 0.22);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.28, cy + r * 0.64);
+  ctx.quadraticCurveTo(cx - r * 0.85, cy + r * 0.62, cx - r * 0.72, cy + r * 0.20);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawInstagramLogo(cx, cy, r, color = '#ffffff') {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1.8, r * 0.2);
+  const sz = r * 1.48;
+  roundRect(cx - sz / 2, cy - sz / 2, sz, sz, sz * 0.28);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.36, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.42, cy - r * 0.42, Math.max(1.4, r * 0.11), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSocialButton(id, platform, label, x, y, w, h, onClick) {
+  const bw = isBwTheme();
+  const hovered = hoverBtnId === id;
+  ctx.save();
+  roundRect(x, y, w, h, bw ? 3 : 10);
+
+  if (bw) {
+    ctx.fillStyle = hovered ? '#ffffff' : '#000000';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+  } else if (platform === 'github') {
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, hovered ? '#343b46' : '#24292e');
+    g.addColorStop(1, '#161b22');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = hovered ? '#f0f6fc' : '#6e7681';
+    ctx.lineWidth = hovered ? 2.2 : 1.5;
+    ctx.stroke();
+  } else {
+    const g = ctx.createLinearGradient(x, y + h, x + w, y);
+    g.addColorStop(0, '#f09433');
+    g.addColorStop(0.25, '#e6683c');
+    g.addColorStop(0.5, '#dc2743');
+    g.addColorStop(0.75, '#cc2366');
+    g.addColorStop(1, '#bc1888');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = hovered ? '#ffffff' : 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = hovered ? 2.2 : 1.5;
+    ctx.stroke();
+  }
+
+  const fg = (bw && hovered) ? '#000000' : '#ffffff';
+  const iconR = Math.min(h * 0.34, 11);
+
+  if (label) {
+    ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const tw = ctx.measureText(label).width;
+    const totalW = iconR * 2 + 8 + tw;
+    const startX = x + (w - totalW) / 2;
+    const iconCX = startX + iconR;
+    const iconCY = y + h / 2;
+    if (platform === 'github') drawGitHubLogo(iconCX, iconCY, iconR, fg);
+    else drawInstagramLogo(iconCX, iconCY, iconR, fg);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = fg;
+    ctx.fillText(label, startX + iconR * 2 + 8, y + h / 2 + 4);
+  } else {
+    if (platform === 'github') drawGitHubLogo(x + w / 2, y + h / 2, iconR, fg);
+    else drawInstagramLogo(x + w / 2, y + h / 2, iconR, fg);
+  }
+
+  ctx.restore();
+  registerButton(id, x, y, w, h, onClick);
+}
+
+function drawFullScreenMenuBackdrop() {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : '#070b18';
+  ctx.fillRect(0, 0, W, H);
+  if (!bw && !settings.oled) {
+    ctx.fillStyle = isMonoTheme() ? hexToRgba(pal.accent, 0.04) : 'rgba(20,34,68,0.32)';
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.strokeStyle = bw ? '#ffffff' : hexToRgba(pal.accent, 0.45);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(2, 2, W - 4, H - 4);
+}
+
+function drawFirstRunNameModal() {
+  if (!firstRunNameOpen) return;
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  drawBlockyLogo(W / 2, isPortrait ? 90 : 70, Math.min(W - 48, 680), 'DISCONNECTED', 'palette');
+
+  const contentW = Math.min(W - 48, 520);
+  const boxX = Math.floor((W - contentW) / 2);
+  const centerY = Math.floor(H / 2);
+
+  ctx.textAlign = 'center';
+  ctx.font = '800 26px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('CHOOSE YOUR USERNAME', W / 2, centerY - 64);
+
+  ctx.font = '600 13px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+  ctx.fillText(`UP TO ${MAX_NAME_LEN} LETTERS  ·  USED FOR HIGH SCORES`, W / 2, centerY - 34);
+
+  const inY = centerY - 12;
+  roundRect(boxX, inY, contentW, 58, bw ? 3 : 12);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  ctx.font = '800 26px ui-monospace, monospace';
+  ctx.fillStyle = '#ffffff';
+  drawCenteredInputWithCursor(firstRunName, W / 2, inY + 38, true);
+
+  registerButton('first_name_box', boxX, inY, contentW, 58, () => {
+    openTextInput('firstRunName');
+  });
+
+  const btnW = 240;
+  drawPillButton(
+    'first_name_save',
+    '✓  SAVE',
+    null,
+    Math.floor((W - btnW) / 2),
+    inY + 84,
+    btnW,
+    54,
+    false,
+    true,
+    () => commitFirstRunUsername(),
+    true
+  );
+
+  ctx.textAlign = 'center';
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(155,185,235,0.6)';
+  ctx.fillText('TYPE YOUR NAME AND PRESS ENTER OR SAVE', W / 2, H - 32);
+
+  ctx.restore();
+}
+
+function drawTitleOverlay() {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  const innerW = Math.min(W - 44, isPortrait ? 496 : 780);
+  const innerX = Math.floor((W - innerW) / 2);
+  const topPad = isPortrait ? 38 : 26;
+
+  const logoY = topPad;
+  const logoMaxW = innerW;
+  const logoHeight = 65;
+  drawBlockyLogo(W / 2, logoY, logoMaxW, 'DISCONNECTED', 'palette');
+
+  registerButton('title_logo_clickable', W / 2 - 180, logoY - 10, 360, logoHeight + 20, () => {
+    const now = performance.now();
+    if (now - logoClickTimer > 2000) logoClickCount = 0;
+    logoClickCount++;
+    logoClickTimer = now;
+    if (logoClickCount >= 5) {
+      logoClickCount = 0;
+      rickrollActive = true;
+      rickrollNoteTimer = 0;
+      rickrollNoteIdx = 0;
+      play8BitNote(RICKROLL_MELODY[0].f, RICKROLL_MELODY[0].d);
+    }
+  });
+
+  ctx.textAlign = 'center';
+  ctx.font = '800 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+  ctx.fillText(`MADE BY NEARBLAND   ·   PLAYER: ${(settings.defaultName || 'RICK').slice(0, MAX_NAME_LEN)}`, W / 2, topPad + 98);
+
+  const modeBoxY = topPad + 122;
+  const modeBoxH = isPortrait ? 102 : 92;
+  roundRect(innerX, modeBoxY, innerW, modeBoxH, bw ? 3 : 14);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(18,26,50,0.75)';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : 'rgba(130,175,255,0.22)';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.font = '800 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(180,210,255,0.8)';
+  ctx.fillText('SELECT GAMEPLAY MODE & ZEN', innerX + 16, modeBoxY + 22);
+
+  const modeBtnW = Math.floor((innerW - 44) / 3);
+  const modeBtnY = modeBoxY + 32;
+  const modeBtnH = modeBoxH - 44;
+  drawPillButton(
+    'title_mode_lines',
+    'LINES',
+    `${lineGoal} LN GOAL`,
+    innerX + 14,
+    modeBtnY,
+    modeBtnW,
+    modeBtnH,
+    !endlessMode,
+    false,
+    () => { titleFocus = 0; endlessMode = false; saveSettings(); },
+    titleFocus === 0
+  );
+  drawPillButton(
+    'title_mode_endless',
+    'ENDLESS',
+    'SURVIVAL',
+    innerX + 22 + modeBtnW,
+    modeBtnY,
+    modeBtnW,
+    modeBtnH,
+    endlessMode,
+    false,
+    () => { titleFocus = 1; endlessMode = true; saveSettings(); },
+    titleFocus === 1
+  );
+
+  const zenCardX = innerX + 30 + modeBtnW * 2;
+  roundRect(zenCardX, modeBtnY, modeBtnW, modeBtnH, bw ? 3 : 12);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(14,20,38,0.92)';
+  ctx.fill();
+  ctx.strokeStyle = titleFocus === 2 ? '#ffffff' : (bw ? '#ffffff' : 'rgba(140,175,240,0.32)');
+  ctx.lineWidth = titleFocus === 2 ? 2.2 : 1.5;
+  ctx.stroke();
+  ctx.textAlign = 'left';
+  ctx.font = '800 13px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('ZEN', zenCardX + 12, modeBtnY + Math.floor(modeBtnH / 2) - 1);
+  ctx.font = '600 9px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(155,185,235,0.65)';
+  ctx.fillText(zenMode ? 'UNRANKED' : 'RANKED', zenCardX + 12, modeBtnY + Math.floor(modeBtnH / 2) + 12);
+
+  const togW = Math.min(60, Math.max(46, Math.floor(modeBtnW * 0.36)));
+  const togH = 28;
+  drawIosToggle(
+    'title_zen_toggle',
+    zenCardX + modeBtnW - togW - 10,
+    modeBtnY + Math.floor((modeBtnH - togH) / 2),
+    togW,
+    togH,
+    zenMode,
+    () => {
+      titleFocus = 2;
+      zenMode = !zenMode;
+      triggerZenToggleEasterEggCheck();
+      saveSettings();
+    },
+    titleFocus === 2
+  );
+
+  const lineBoxY = modeBoxY + modeBoxH + 14;
+  const rowBoxH = isPortrait ? 76 : 70;
+  ctx.save();
+  if (endlessMode && !bw) ctx.globalAlpha = 0.36;
+  roundRect(innerX, lineBoxY, innerW, rowBoxH, bw ? 3 : 14);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(18,26,50,0.75)';
+  ctx.fill();
+  ctx.strokeStyle = (!endlessMode && titleFocus === 3) ? (bw ? '#ffffff' : pal.accent) : (bw ? '#ffffff' : 'rgba(130,175,255,0.22)');
+  ctx.lineWidth = (!endlessMode && titleFocus === 3) ? 2.2 : 1.4;
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.font = '800 13px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(180,210,255,0.85)';
+  ctx.fillText('LINE GOAL THRESHOLD', innerX + 18, lineBoxY + 28);
+
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(145,175,225,0.6)';
+  ctx.fillText(endlessMode ? 'DISABLED IN ENDLESS MODE' : `CLEAR ${lineGoal} LINES TO COMPLETE`, innerX + 18, lineBoxY + 50);
+
+  const stepW = 50, stepH = rowBoxH - 24;
+  const rightEdge = innerX + innerW - 16;
+  const plusX = rightEdge - stepW;
+  const badgeW = 132;
+  const badgeX = plusX - badgeW - 8;
+  const minusX = badgeX - stepW - 8;
+  const lineStepY = lineBoxY + 12;
+
+  drawPillButton('title_lines_minus', '−', null, minusX, lineStepY, stepW, stepH, false, false, () => {
+    if (endlessMode) return;
+    titleFocus = 3;
+    adjustLineGoal(-1);
+  }, false, endlessMode || lineGoal <= getMinLineGoal());
+
+  roundRect(badgeX, lineStepY, badgeW, stepH, bw ? 3 : 10);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : (endlessMode ? 'rgba(140,170,220,0.3)' : pal.accent);
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.font = '800 18px ui-monospace, monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`${lineGoal} LINES`, badgeX + badgeW / 2, lineStepY + Math.floor(stepH / 2) + 6);
+
+  drawPillButton('title_lines_plus', '+', null, plusX, lineStepY, stepW, stepH, false, false, () => {
+    if (endlessMode) return;
+    titleFocus = 3;
+    adjustLineGoal(1);
+  }, false, endlessMode || lineGoal >= CONFIG.maxLinesGoal);
+  ctx.restore();
+
+  const lvlBoxY = lineBoxY + rowBoxH + 14;
+  roundRect(innerX, lvlBoxY, innerW, rowBoxH, bw ? 3 : 14);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(18,26,50,0.75)';
+  ctx.fill();
+  ctx.strokeStyle = titleFocus === 4 ? (bw ? '#ffffff' : pal.accent) : (bw ? '#ffffff' : 'rgba(130,175,255,0.22)');
+  ctx.lineWidth = titleFocus === 4 ? 2.2 : 1.4;
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.font = '800 13px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(180,210,255,0.85)';
+  ctx.fillText('START SPEED LEVEL', innerX + 18, lvlBoxY + 28);
+
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(145,175,225,0.6)';
+  ctx.fillText(`GRAVITY SPEED ${startLevel} / ${CONFIG.levelCap}`, innerX + 18, lvlBoxY + 50);
+
+  const stepY = lvlBoxY + 12;
+
+  drawPillButton('title_lvl_minus', '−', null, minusX, stepY, stepW, stepH, false, false, () => {
+    titleFocus = 4;
+    adjustStartLevel(-1);
+    saveSettings();
+  }, false, startLevel <= 1);
+
+  roundRect(badgeX, stepY, badgeW, stepH, bw ? 3 : 10);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.font = '800 18px ui-monospace, monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`LVL ${startLevel}`, badgeX + badgeW / 2, stepY + Math.floor(stepH / 2) + 6);
+
+  drawPillButton('title_lvl_plus', '+', null, plusX, stepY, stepW, stepH, false, false, () => {
+    titleFocus = 4;
+    adjustStartLevel(1);
+    saveSettings();
+  }, false, startLevel >= CONFIG.levelCap);
+
+  const actY = lvlBoxY + rowBoxH + 22;
+  const actH = isPortrait ? 64 : 60;
+  const startW = Math.floor(innerW * 0.42);
+  const sideW = Math.floor((innerW - startW - 24) / 2);
+  const startBtnX = Math.floor(W / 2 - startW / 2);
+
+  drawPillButton(
+    'title_scores',
+    '🏆  SCORES',
+    `${highScores.length} SAVED`,
+    innerX,
+    actY,
+    sideW,
+    actH,
+    false,
+    false,
+    () => { titleFocus = 6; highScoresScrollY = 0; highScoresOpen = true; },
+    titleFocus === 6
+  );
+
+  drawPillButton(
+    'title_start',
+    '▶  START GAME',
+    endlessMode ? `ENDLESS · LVL ${startLevel}` : `${lineGoal} LINES · LVL ${startLevel}`,
+    startBtnX,
+    actY,
+    startW,
+    actH,
+    false,
+    true,
+    () => { titleFocus = 5; startGame(); },
+    titleFocus === 5
+  );
+
+  drawPillButton(
+    'title_settings',
+    '⚙  SETTINGS',
+    'THEME & SCALE',
+    innerX + sideW + startW + 24,
+    actY,
+    sideW,
+    actH,
+    false,
+    false,
+    () => { titleFocus = 7; openSettingsModal(); },
+    titleFocus === 7
+  );
+
+  const socBtnW = 148;
+  const socBtnH = 32;
+  const socGap = 14;
+  const socY = H - 68;
+  const ghX = Math.floor(W / 2 - socBtnW - socGap / 2);
+  const igX = Math.floor(W / 2 + socGap / 2);
+
+  drawSocialButton('title_github_link', 'github', 'nearbland', ghX, socY, socBtnW, socBtnH, () => {
+    try { window.open('https://github.com/nearbland', '_blank', 'noopener,noreferrer'); } catch (_) {}
+  });
+
+  drawSocialButton('title_insta_link', 'instagram', '@douayoussama', igX, socY, socBtnW, socBtnH, () => {
+    try { window.open('https://instagram.com/douayoussama', '_blank', 'noopener,noreferrer'); } catch (_) {}
+  });
+
+  ctx.textAlign = 'center';
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : 'rgba(155,185,235,0.6)';
+  ctx.fillText(
+    lastInputDevice === 'gamepad'
+      ? 'L-STICK / D-PAD NAVIGATE & ADJUST   ·   A SELECT   ·   START PLAY'
+      : 'ARROWS / D-PAD NAVIGATE   ·   ENTER / SPACE SELECT   ·   CLICK OR TAP ANY BUTTON',
+    W / 2,
+    H - 18
+  );
+
+  ctx.restore();
+}
+
+function getSettingsLayoutMetrics() {
+  const s = getActiveAppScale();
+  const padX = isPortrait ? 18 : Math.max(24, Math.round(W * 0.05));
+  const rowW = W - padX * 2 - 14;
+  const stacked = (rowW / s) < 520;
+  const baseRowH = isPortrait ? 64 : 58;
+  const rowH = Math.round(baseRowH * (stacked ? 1.55 : 1) * s);
+  const gap = Math.max(6, Math.round(10 * s));
+  const listTop = 78;
+  const listBottom = H - 78;
+  const listH = Math.max(120, listBottom - listTop);
+  return { s, padX, rowW, stacked, rowH, gap, listTop, listBottom, listH };
+}
+
+function ensureSettingsFocusVisible() {
+  if (settingsFocus >= 12) return;
+  const { rowH, gap, listH } = getSettingsLayoutMetrics();
+  const itemTop = settingsFocus * (rowH + gap);
+  const itemBottom = itemTop + rowH;
+  if (itemTop < settingsScrollY) {
+    settingsScrollY = itemTop;
+  } else if (itemBottom > settingsScrollY + listH) {
+    settingsScrollY = itemBottom - listH;
+  }
+}
+
+function drawSettingsModal() {
+  scaleSliderRect = null;
+  settingsViewport = null;
+  if (!settingsOpen) return;
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  const { s, padX, rowW, stacked, rowH, gap, listTop, listBottom, listH } = getSettingsLayoutMetrics();
+  const fontScale = Math.max(0.7, Math.min(1.65, Math.pow(s, 0.45)));
+  const ctrlScale = Math.max(0.7, Math.min(1.45, Math.pow(s, 0.35)));
+
+  ctx.textAlign = 'left';
+  ctx.font = '900 24px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('⚙  GAME SETTINGS', padX, 42);
+
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+  ctx.fillText(
+    lastInputDevice === 'gamepad'
+      ? 'L-STICK/DPAD SELECT  ·  R-STICK SCROLL  ·  B BACK'
+      : 'SCROLL WITH WHEEL, R-STICK OR DRAG  ·  CUSTOMIZE TOUCH LAYOUT',
+    padX,
+    62
+  );
+
+  const headBtnSz = 38;
+  const headBtnY = 18;
+  const igHeadX = W - padX - headBtnSz;
+  const ghHeadX = igHeadX - headBtnSz - 10;
+
+  drawSocialButton('set_gh_btn', 'github', null, ghHeadX, headBtnY, headBtnSz, headBtnSz, () => {
+    try { window.open('https://github.com/nearbland', '_blank', 'noopener,noreferrer'); } catch (_) {}
+  });
+
+  drawSocialButton('set_ig_btn', 'instagram', null, igHeadX, headBtnY, headBtnSz, headBtnSz, () => {
+    try { window.open('https://instagram.com/douayoussama', '_blank', 'noopener,noreferrer'); } catch (_) {}
+  });
+
+  const rowX = padX;
+  const rightX = rowX + rowW - 12;
+
+  const totalRows = 12;
+  const totalContentH = totalRows * rowH + (totalRows - 1) * gap + 12;
+  settingsMaxScroll = Math.max(0, totalContentH - listH);
+
+  if (draggingScaleSlider) {
+    const row10Center = 10 * (rowH + gap) + rowH / 2;
+    settingsScrollY = Math.max(0, Math.min(settingsMaxScroll, row10Center - listH * 0.65));
+  } else {
+    settingsScrollY = Math.max(0, Math.min(settingsMaxScroll, settingsScrollY));
+  }
+  settingsViewport = { x: padX - 4, y: listTop, w: W - padX * 2 + 8, h: listH };
+
+  let ry = listTop - settingsScrollY;
+  const buttonsBeforeList = uiButtons.length;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, listTop, W, listH);
+  ctx.clip();
+
+  const ctrlH = Math.max(28, Math.min(stacked ? Math.floor(rowH * 0.44) : rowH - 14, Math.round(42 * ctrlScale)));
+  const getCtrlY = () => stacked ? (ry + rowH - ctrlH - 8) : (ry + Math.floor((rowH - ctrlH) / 2));
+
+  const drawRowBg = (rowIdx, label, sub, disabledRow = false) => {
+    const focused = settingsFocus === rowIdx;
+    ctx.save();
+    if (disabledRow && !bw) ctx.globalAlpha = 0.36;
+    roundRect(rowX, ry, rowW, rowH, bw ? 3 : Math.round(10 * ctrlScale));
+    ctx.fillStyle = (settings.oled || bw) ? '#000000' : (focused ? 'rgba(34,50,92,0.85)' : 'rgba(22,32,60,0.72)');
+    ctx.fill();
+    ctx.strokeStyle = focused ? (bw ? '#ffffff' : pal.accent) : (bw ? '#ffffff' : 'rgba(130,175,255,0.2)');
+    ctx.lineWidth = focused ? 2.2 : 1.2;
+    ctx.stroke();
+
+    const titleSz = Math.round(13 * fontScale);
+    const subSz = Math.round(10 * fontScale);
+    ctx.textAlign = 'left';
+    ctx.font = `700 ${titleSz}px system-ui, sans-serif`;
+    ctx.fillStyle = '#e8f1ff';
+    const textBaseY = stacked ? (ry + titleSz + 8) : (ry + Math.floor(rowH / 2) - (sub ? 4 : -5));
+    ctx.fillText(label, rowX + 16, textBaseY);
+    if (sub) {
+      ctx.font = `600 ${subSz}px ui-monospace, monospace`;
+      ctx.fillStyle = bw ? '#ffffff' : 'rgba(155,185,235,0.65)';
+      ctx.fillText(sub, rowX + 16, textBaseY + subSz + 6);
+    }
+    ctx.restore();
+  };
+
+  // Row 0: Game Mode
+  drawRowBg(0, 'GAME MODE', 'Switch between target Lines or Endless');
+  {
+    const cy = getCtrlY();
+    const bw0 = Math.round(102 * ctrlScale);
+    drawPillButton('set_mode_lines', 'LINES', null, rightX - bw0 * 2 - 10, cy, bw0, ctrlH, !endlessMode, false, () => {
+      settingsFocus = 0; endlessMode = false;
+    });
+    drawPillButton('set_mode_end', 'ENDLESS', null, rightX - bw0, cy, bw0, ctrlH, endlessMode, false, () => {
+      settingsFocus = 0; endlessMode = true;
+    });
+  }
+  ry += rowH + gap;
+
+  // Row 1: Zen Mode
+  drawRowBg(1, 'ZEN MODE', 'Hides score & stopwatch; unranked');
+  {
+    const togW = Math.round(68 * ctrlScale);
+    const togH = Math.min(ctrlH, Math.round(34 * ctrlScale));
+    const togY = ry + (stacked ? (rowH - togH - 10) : Math.floor((rowH - togH) / 2));
+    drawIosToggle(
+      'set_zen_toggle',
+      rightX - togW - 4,
+      togY,
+      togW,
+      togH,
+      zenMode,
+      () => {
+        settingsFocus = 1;
+        zenMode = !zenMode;
+        if (zenMode && isRunActive()) state.zenRun = true;
+        triggerZenToggleEasterEggCheck();
+      },
+      settingsFocus === 1,
+      zenToggleAnim
+    );
+  }
+  ry += rowH + gap;
+
+  // Row 2: Assists
+  drawRowBg(2, 'ASSISTS', 'Recommends possible blocks when surface > 75% full');
+  {
+    const togW = Math.round(68 * ctrlScale);
+    const togH = Math.min(ctrlH, Math.round(34 * ctrlScale));
+    const togY = ry + (stacked ? (rowH - togH - 10) : Math.floor((rowH - togH) / 2));
+    drawIosToggle(
+      'set_assists_toggle',
+      rightX - togW - 4,
+      togY,
+      togW,
+      togH,
+      settings.assists,
+      () => {
+        settingsFocus = 2;
+        settings.assists = !settings.assists;
+      },
+      settingsFocus === 2,
+      assistsToggleAnim
+    );
+  }
+  ry += rowH + gap;
+
+  // Row 3: Line Goal
+  const minGoal = getMinLineGoal();
+  const lockSub = endlessMode
+    ? 'Disabled while Endless Mode is selected'
+    : (isRunActive()
+        ? `40–400 (Locked >= ${minGoal} LN for current run)`
+        : '40 to 400 in 40-line increments');
+  drawRowBg(3, 'LINE GOAL', lockSub, endlessMode);
+  {
+    const cy = getCtrlY();
+    const stepBtnW = Math.round(42 * ctrlScale);
+    const valW = Math.round(98 * ctrlScale);
+    ctx.save();
+    if (endlessMode && !bw) ctx.globalAlpha = 0.36;
+    drawPillButton('set_lines_minus', '−', null, rightX - stepBtnW * 2 - valW - 12, cy, stepBtnW, ctrlH, false, false, () => {
+      if (endlessMode) return;
+      settingsFocus = 3; adjustLineGoal(-1);
+    }, false, endlessMode || lineGoal <= minGoal);
+    roundRect(rightX - stepBtnW - valW - 6, cy, valW, ctrlH, bw ? 2 : 8);
+    ctx.fillStyle = '#000000'; ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : (endlessMode ? 'rgba(140,170,220,0.3)' : pal.accent); ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${Math.round(14 * ctrlScale)}px ui-monospace, monospace`;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${lineGoal} LN`, rightX - stepBtnW - 6 - valW / 2, cy + Math.floor(ctrlH / 2) + 5);
+    drawPillButton('set_lines_plus', '+', null, rightX - stepBtnW, cy, stepBtnW, ctrlH, false, false, () => {
+      if (endlessMode) return;
+      settingsFocus = 3; adjustLineGoal(1);
+    }, false, endlessMode || lineGoal >= CONFIG.maxLinesGoal);
+    ctx.restore();
+  }
+  ry += rowH + gap;
+
+  // Row 4: Start Level
+  drawRowBg(4, 'START SPEED LEVEL', 'Initial gravity speed (1–15)');
+  {
+    const cy = getCtrlY();
+    const stepBtnW = Math.round(42 * ctrlScale);
+    const valW = Math.round(98 * ctrlScale);
+    drawPillButton('set_lvl_minus', '−', null, rightX - stepBtnW * 2 - valW - 12, cy, stepBtnW, ctrlH, false, false, () => {
+      settingsFocus = 4; adjustStartLevel(-1);
+    }, false, startLevel <= 1);
+    roundRect(rightX - stepBtnW - valW - 6, cy, valW, ctrlH, bw ? 2 : 8);
+    ctx.fillStyle = '#000000'; ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : pal.accent; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${Math.round(14 * ctrlScale)}px ui-monospace, monospace`;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`LVL ${startLevel}`, rightX - stepBtnW - 6 - valW / 2, cy + Math.floor(ctrlH / 2) + 5);
+    drawPillButton('set_lvl_plus', '+', null, rightX - stepBtnW, cy, stepBtnW, ctrlH, false, false, () => {
+      settingsFocus = 4; adjustStartLevel(1);
+    }, false, startLevel >= CONFIG.levelCap);
+  }
+  ry += rowH + gap;
+
+  // Row 5: Default High Score Name
+  const editingDefName = textInputTarget === 'defaultName';
+  drawRowBg(5, 'DEFAULT HIGH SCORE NAME', editingDefName ? `TYPE NAME (MAX ${MAX_NAME_LEN} LETTERS, ENTER TO DONE)` : `Max ${MAX_NAME_LEN} letters · Toggle auto-name & click to edit`);
+  {
+    const cy = getCtrlY();
+    const nameBoxW = Math.round(154 * ctrlScale);
+    const autoBtnW = Math.round(96 * ctrlScale);
+    drawPillButton(
+      'set_defname_toggle',
+      settings.alwaysUseDefaultName ? 'AUTO: ON' : 'AUTO: OFF',
+      null,
+      rightX - nameBoxW - autoBtnW - 10,
+      cy,
+      autoBtnW,
+      ctrlH,
+      settings.alwaysUseDefaultName,
+      false,
+      () => {
+        settingsFocus = 5;
+        settings.alwaysUseDefaultName = !settings.alwaysUseDefaultName;
+      }
+    );
+    const nameBoxX = rightX - nameBoxW;
+    roundRect(nameBoxX, cy, nameBoxW, ctrlH, bw ? 2 : 8);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    ctx.strokeStyle = editingDefName ? '#ffffff' : (bw ? '#ffffff' : pal.accent);
+    ctx.lineWidth = editingDefName ? 2.4 : 1.5;
+    ctx.stroke();
+    ctx.font = `700 ${Math.round(14 * ctrlScale)}px ui-monospace, monospace`;
+    ctx.fillStyle = '#ffffff';
+    drawCenteredInputWithCursor((settings.defaultName || '').slice(0, MAX_NAME_LEN), nameBoxX + nameBoxW / 2, cy + Math.floor(ctrlH / 2) + 5, editingDefName);
+    registerButton('set_defname_input', nameBoxX, cy, nameBoxW, ctrlH, () => {
+      settingsFocus = 5;
+      if (textInputTarget === 'defaultName') closeTextInput();
+      else openTextInput('defaultName');
+    });
+  }
+  ry += rowH + gap;
+
+  // Row 6: OLED Mode
+  drawRowBg(6, 'OLED PITCH-BLACK MODE', 'Pure #000000 backgrounds & high contrast');
+  {
+    const cy = getCtrlY();
+    const bw6 = Math.round(102 * ctrlScale);
+    drawPillButton('set_oled_off', 'STANDARD', null, rightX - bw6 * 2 - 10, cy, bw6, ctrlH, !settings.oled, false, () => {
+      settingsFocus = 6; settings.oled = false; document.body.classList.toggle('oled-mode', false);
+    });
+    drawPillButton('set_oled_on', 'OLED ON', null, rightX - bw6, cy, bw6, ctrlH, settings.oled, false, () => {
+      settingsFocus = 6; settings.oled = true; document.body.classList.toggle('oled-mode', true);
+    });
+  }
+  ry += rowH + gap;
+
+  // Row 7: Color Palette
+  drawRowBg(7, 'COLOR PALETTE / THEME', 'Select visual theme & block style');
+  {
+    const cy = getCtrlY();
+    const arrW = Math.round(38 * ctrlScale);
+    const valW = Math.round(146 * ctrlScale);
+    drawPillButton('set_pal_prev', '◀', null, rightX - arrW * 2 - valW - 12, cy, arrW, ctrlH, false, false, () => {
+      settingsFocus = 7; applyPalette(settings.paletteIdx - 1);
+    });
+    roundRect(rightX - arrW - valW - 6, cy, valW, ctrlH, bw ? 2 : 8);
+    ctx.fillStyle = '#000000'; ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : pal.accent; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${Math.round(12 * ctrlScale)}px ui-monospace, monospace`;
+    ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+    ctx.fillText(pal.name, rightX - arrW - 6 - valW / 2, cy + Math.floor(ctrlH / 2) + 4);
+    drawPillButton('set_pal_next', '▶', null, rightX - arrW, cy, arrW, ctrlH, false, false, () => {
+      settingsFocus = 7; applyPalette(settings.paletteIdx + 1);
+    });
+  }
+  ry += rowH + gap;
+
+  // Row 8: Monochrome Accent
+  const curMono = MONO_ACCENTS[settings.monoAccentIdx] || MONO_ACCENTS[0];
+  const monoActive = isMonoTheme();
+  drawRowBg(
+    8,
+    'MONOCHROME ACCENT',
+    monoActive ? `Active accent: ${curMono.name}` : 'Disabled (Select Monochrome palette to customize)',
+    !monoActive
+  );
+  {
+    const cy = getCtrlY();
+    const arrW = Math.round(38 * ctrlScale);
+    const valW = Math.round(146 * ctrlScale);
+    ctx.save();
+    if (!monoActive && !bw) ctx.globalAlpha = 0.36;
+    drawPillButton('set_mono_prev', '◀', null, rightX - arrW * 2 - valW - 12, cy, arrW, ctrlH, false, false, () => {
+      if (!monoActive) return;
+      settingsFocus = 8;
+      settings.monoAccentIdx = (settings.monoAccentIdx - 1 + MONO_ACCENTS.length) % MONO_ACCENTS.length;
+      updateMonoPaletteColors();
+      applyPalette(settings.paletteIdx);
+    }, false, !monoActive);
+    roundRect(rightX - arrW - valW - 6, cy, valW, ctrlH, bw ? 2 : 8);
+    ctx.fillStyle = '#000000'; ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : (monoActive ? curMono.hex : 'rgba(140,170,220,0.3)'); ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = `800 ${Math.round(12 * ctrlScale)}px ui-monospace, monospace`;
+    ctx.fillStyle = bw ? '#ffffff' : (monoActive ? curMono.hex : 'rgba(180,205,255,0.6)');
+    ctx.fillText(curMono.name, rightX - arrW - 6 - valW / 2, cy + Math.floor(ctrlH / 2) + 4);
+    drawPillButton('set_mono_next', '▶', null, rightX - arrW, cy, arrW, ctrlH, false, false, () => {
+      if (!monoActive) return;
+      settingsFocus = 8;
+      settings.monoAccentIdx = (settings.monoAccentIdx + 1) % MONO_ACCENTS.length;
+      updateMonoPaletteColors();
+      applyPalette(settings.paletteIdx);
+    }, false, !monoActive);
+    ctx.restore();
+  }
+  ry += rowH + gap;
+
+  // Row 9: Screen Orientation
+  drawRowBg(9, 'SCREEN ORIENTATION', 'Auto-detect or lock Landscape / Portrait');
+  {
+    const cy = getCtrlY();
+    const bw9 = Math.round(74 * ctrlScale);
+    const opts = [['auto', 'AUTO'], ['landscape', 'LAND'], ['portrait', 'PORT']];
+    for (let i = 0; i < opts.length; i++) {
+      const [val, lbl] = opts[i];
+      const bx = rightX - (3 - i) * bw9 - (2 - i) * 6;
+      drawPillButton(`set_ori_${val}`, lbl, null, bx, cy, bw9, ctrlH, settings.orientation === val, false, () => {
+        settingsFocus = 9;
+        settings.orientation = val;
+        updateLayout();
+      });
+    }
+  }
+  ry += rowH + gap;
+
+  // Row 10: App Scaling
+  drawRowBg(10, 'APP SCALING', `${settings.appScale}%  ·  5% steps (50% to 500%)`);
+  {
+    const cy = getCtrlY();
+    const stepBtnW = Math.round(36 * ctrlScale);
+    const sliderW = Math.round(140 * ctrlScale);
+    const minusX = rightX - stepBtnW * 2 - sliderW - 16;
+    const trackX = rightX - stepBtnW - sliderW - 8;
+    const plusX = rightX - stepBtnW;
+
+    drawPillButton('set_scale_minus', '−', null, minusX, cy, stepBtnW, ctrlH, false, false, () => {
+      settingsFocus = 10;
+      settings.appScale = Math.max(50, settings.appScale - 5);
+    }, false, settings.appScale <= 50);
+
+    const trackH = 12;
+    const trackY = cy + Math.floor((ctrlH - trackH) / 2);
+    roundRect(trackX, trackY, sliderW, trackH, 6);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const pct = (settings.appScale - 50) / 450;
+    const fillW = Math.max(0, Math.min(sliderW, sliderW * pct));
+    if (fillW > 0) {
+      roundRect(trackX, trackY, fillW, trackH, 6);
+      ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+      ctx.fill();
+    }
+
+    const thumbW = 28;
+    const thumbH = Math.min(ctrlH - 4, 26);
+    const thumbX = trackX + Math.round(pct * (sliderW - thumbW));
+    const thumbY = cy + Math.floor((ctrlH - thumbH) / 2);
+    roundRect(thumbX, thumbY, thumbW, thumbH, 6);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    if (cy + ctrlH >= listTop && cy <= listBottom) {
+      scaleSliderRect = { x: trackX, y: cy, w: sliderW, h: ctrlH };
+    }
+
+    drawPillButton('set_scale_plus', '+', null, plusX, cy, stepBtnW, ctrlH, false, false, () => {
+      settingsFocus = 10;
+      settings.appScale = Math.min(500, settings.appScale + 5);
+    }, false, settings.appScale >= 500);
+  }
+  ry += rowH + gap;
+
+  // Row 11: Touch Controls & Free-Form Button Placement
+  drawRowBg(11, 'TOUCH CONTROLS & POSITIONS', 'Show/hide pad or drag buttons anywhere');
+  {
+    const cy = getCtrlY();
+    const bw11 = Math.round(52 * ctrlScale);
+    const moveW = Math.round(92 * ctrlScale);
+    const opts = [['auto', 'AUTO'], ['on', 'ON'], ['off', 'OFF']];
+    for (let i = 0; i < opts.length; i++) {
+      const [val, lbl] = opts[i];
+      const bx = rightX - moveW - 8 - (3 - i) * bw11 - (2 - i) * 5;
+      drawPillButton(`set_touch_${val}`, lbl, null, bx, cy, bw11, ctrlH, settings.touchControls === val, false, () => {
+        settingsFocus = 11;
+        settings.touchControls = val;
+        updateLayout();
+      });
+    }
+    drawPillButton('set_touch_move', 'MOVE PAD', null, rightX - moveW, cy, moveW, ctrlH, false, true, () => {
+      settingsFocus = 11;
+      touchEditorOpen = true;
+    });
+  }
+
+  // Filter out any list buttons that scrolled outside the visible list viewport
+  for (let i = uiButtons.length - 1; i >= buttonsBeforeList; i--) {
+    const b = uiButtons[i];
+    if (b.y + b.h < listTop || b.y > listBottom) {
+      uiButtons.splice(i, 1);
+    }
+  }
+
+  // Tag surviving list buttons so click checks reject clipped portions that lie
+  // outside the visible list viewport.
+  for (let i = buttonsBeforeList; i < uiButtons.length; i++) {
+    uiButtons[i]._isListButton = true;
+  }
+
+  ctx.restore();
+
+  // Scrollbar on the right
+  if (settingsMaxScroll > 0) {
+    const sbX = W - padX + 4;
+    const sbW = 6;
+    roundRect(sbX, listTop, sbW, listH, 3);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fill();
+    const thumbH = Math.max(32, Math.round((listH / totalContentH) * listH));
+    const thumbY = listTop + Math.round((settingsScrollY / settingsMaxScroll) * (listH - thumbH));
+    roundRect(sbX, thumbY, sbW, thumbH, 3);
+    ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+    ctx.fill();
+  }
+
+  // Footer Save & Back buttons
+  const footY = H - 64;
+  const footBtnW = Math.min(220, Math.floor((W - padX * 2 - 20) / 2));
+  const totalFootW = footBtnW * 2 + 16;
+  const startFootX = Math.floor((W - totalFootW) / 2);
+
+  drawPillButton(
+    'set_save_btn',
+    '✓  SAVE',
+    null,
+    startFootX,
+    footY,
+    footBtnW,
+    50,
+    false,
+    true,
+    () => saveAndCloseSettingsModal(),
+    settingsFocus === 12
+  );
+
+  drawPillButton(
+    'set_back_btn',
+    '←  BACK',
+    null,
+    startFootX + footBtnW + 16,
+    footY,
+    footBtnW,
+    50,
+    false,
+    false,
+    () => cancelSettingsModal(),
+    settingsFocus === 13
+  );
+
+  ctx.restore();
+}
+
+function drawTouchLayoutEditorModal() {
+  if (!touchEditorOpen) return;
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(4, 6, 16, 0.86)';
+  ctx.fillRect(0, 0, W, H);
+
+  drawBoard();
+  drawTouchControls();
+
+  const barW = Math.min(W - 24, 520);
+  const barX = Math.floor((W - barW) / 2);
+  const barY = 14;
+  const barH = 82;
+
+  roundRect(barX, barY, barW, barH, bw ? 3 : 12);
+  ctx.fillStyle = '#050814';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.font = '800 14px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('DRAG ANY TOUCH BUTTON TO REPOSITION', W / 2, barY + 22);
+
+  const btnW = Math.floor((barW - 36) / 2);
+  const btnY = barY + 32;
+  drawPillButton('ted_done', '✓  DONE', null, barX + 12, btnY, btnW, 40, false, true, () => {
+    touchEditorOpen = false;
+    draggingTouchBtnId = null;
+    saveSettings();
+  });
+
+  drawPillButton('ted_reset', '↺  RESET DEFAULT', null, barX + 24 + btnW, btnY, btnW, 40, false, false, () => {
+    const orientKey = isPortrait ? 'portrait' : 'landscape';
+    customTouchPositions[orientKey] = {};
+    saveSettings();
+  });
+
+  ctx.restore();
+}
+
+function drawHighScoresModal() {
+  if (!highScoresOpen) return;
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  const padX = isPortrait ? 18 : Math.max(32, Math.round(W * 0.07));
+  const tableW = W - padX * 2;
+
+  ctx.textAlign = 'left';
+  ctx.font = '900 26px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('🏆  HIGH SCORES', padX, 46);
+
+  const headerY = 82;
+  ctx.font = '800 11px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+  ctx.fillText('#', padX + 10, headerY);
+  ctx.fillText('NAME', padX + 42, headerY);
+  ctx.fillText('SCORE', padX + Math.round(tableW * 0.24), headerY);
+  ctx.fillText('MODE', padX + Math.round(tableW * 0.44), headerY);
+  ctx.fillText('LN / SPD', padX + Math.round(tableW * 0.64), headerY);
+  ctx.textAlign = 'right';
+  ctx.fillText('DATE & TIME', padX + tableW - 10, headerY);
+
+  const listTop = 96;
+  const listBottom = H - 82;
+  const listH = Math.max(120, listBottom - listTop);
+  const rowH = 38;
+  const totalH = Math.max(1, highScores.length) * rowH;
+  highScoresMaxScroll = Math.max(0, totalH - listH);
+  highScoresScrollY = Math.max(0, Math.min(highScoresMaxScroll, highScoresScrollY));
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padX, listTop, tableW, listH);
+  ctx.clip();
+
+  if (highScores.length === 0) {
+    ctx.textAlign = 'center';
+    ctx.font = '700 15px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(180,205,255,0.6)';
+    ctx.fillText('NO RANKED HIGH SCORES YET', W / 2, listTop + listH / 2);
+  } else {
+    for (let i = 0; i < highScores.length; i++) {
+      const r = highScores[i];
+      const ry = listTop + i * rowH - highScoresScrollY;
+      if (ry + rowH < listTop || ry > listBottom) continue;
+
+      roundRect(padX, ry, tableW, rowH - 4, bw ? 2 : 8);
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.02)';
+      ctx.fill();
+
+      const ty = ry + 22;
+      ctx.textAlign = 'left';
+      ctx.font = '700 12px ui-monospace, monospace';
+      ctx.fillStyle = i < 3 ? (bw ? '#ffffff' : pal.accent) : 'rgba(190,215,255,0.85)';
+      ctx.fillText(`${i + 1}.`, padX + 10, ty);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(String(r.name || 'PLAYER').slice(0, MAX_NAME_LEN), padX + 42, ty);
+      ctx.fillText(Number(r.score || 0).toLocaleString(), padX + Math.round(tableW * 0.24), ty);
+      ctx.fillStyle = 'rgba(185,210,255,0.85)';
+      ctx.fillText(String(r.runType || 'LINES'), padX + Math.round(tableW * 0.44), ty);
+      ctx.fillText(`${r.lines || 0} / L${r.maxSpeed || 1}`, padX + Math.round(tableW * 0.64), ty);
+
+      ctx.textAlign = 'right';
+      ctx.font = '600 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(165,195,245,0.75)';
+      ctx.fillText(String(r.date || ''), padX + tableW - 10, ty);
+    }
+  }
+  ctx.restore();
+
+  const backW = 220;
+  drawPillButton(
+    'hs_close_btn',
+    '←  BACK',
+    null,
+    Math.floor((W - backW) / 2),
+    H - 64,
+    backW,
+    50,
+    false,
+    true,
+    () => { highScoresOpen = false; },
+    true
+  );
+
+  ctx.restore();
+}
+
+function drawHighScorePromptModal() {
+  if (!highScorePromptOpen) return;
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  const cardW = Math.min(W - 40, 500);
+  const cardX = Math.floor((W - cardW) / 2);
+  const topY = Math.max(48, Math.floor((H - 420) / 2));
+
+  ctx.textAlign = 'center';
+  ctx.font = '900 28px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('NEW RUN RECORD', W / 2, topY + 28);
+
+  ctx.font = '800 34px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+  ctx.fillText(state.score.toLocaleString(), W / 2, topY + 74);
+
+  const infoY = topY + 96;
+  roundRect(cardX, infoY, cardW, 118, bw ? 3 : 12);
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : 'rgba(18,28,54,0.85)';
+  ctx.fill();
+  ctx.strokeStyle = bw ? '#ffffff' : 'rgba(130,175,255,0.28)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const rows = [
+    ['DATE & TIME', state.recordTimestamp],
+    ['RUN TYPE', endlessMode ? 'ENDLESS' : `LINES (${state.lineGoal})`],
+    ['LINES CLEARED', String(state.lines)],
+    ['MAX SPEED', `LEVEL ${state.maxLevel}`],
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    const ry = infoY + 26 + i * 24;
+    ctx.textAlign = 'left';
+    ctx.font = '600 12px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(165,195,245,0.75)';
+    ctx.fillText(rows[i][0], cardX + 18, ry);
+    ctx.textAlign = 'right';
+    ctx.font = '800 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(rows[i][1], cardX + cardW - 18, ry);
+  }
+
+  const inY = infoY + 138;
+  roundRect(cardX, inY, cardW, 56, bw ? 3 : 12);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  ctx.strokeStyle = hsPromptFocus === 0 ? '#ffffff' : (bw ? '#ffffff' : pal.accent);
+  ctx.lineWidth = hsPromptFocus === 0 ? 2.5 : 1.8;
+  ctx.stroke();
+
+  ctx.font = '800 24px ui-monospace, monospace';
+  ctx.fillStyle = '#ffffff';
+  drawCenteredInputWithCursor(currentHsName, W / 2, inY + 36, textInputTarget === 'hsName' || hsPromptFocus === 0);
+
+  registerButton('hsp_name_box', cardX, inY, cardW, 56, () => {
+    if (settings.alwaysUseDefaultName) return;
+    hsPromptFocus = 0;
+    openTextInput('hsName');
+  });
+
+  const btnY = inY + 76;
+  const btnW = Math.floor((cardW - 16) / 2);
+  drawPillButton(
+    'hsp_save',
+    '✓  SAVE',
+    null,
+    cardX,
+    btnY,
+    btnW,
+    52,
+    false,
+    true,
+    () => commitHighScoreRecord(),
+    hsPromptFocus === 1
+  );
+
+  drawPillButton(
+    'hsp_skip',
+    '✕  SKIP',
+    null,
+    cardX + btnW + 16,
+    btnY,
+    btnW,
+    52,
+    false,
+    false,
+    () => {
+      highScorePromptOpen = false;
+      closeTextInput();
+    },
+    hsPromptFocus === 2
+  );
+
+  ctx.restore();
+}
+
+function drawPauseOverlay() {
+  const bw = isBwTheme();
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  drawBlockyLogo(W / 2, isPortrait ? 84 : 64, Math.min(W - 48, 640), 'DISCONNECTED', 'palette');
+
+  ctx.textAlign = 'center';
+  ctx.font = '900 32px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('PAUSED', W / 2, isPortrait ? 204 : 184);
+
+  const btnW = Math.min(W - 64, 340);
+  const bx = Math.floor((W - btnW) / 2);
+  let by = isPortrait ? 240 : 216;
+  const bh = 56;
+  const gap = 14;
+
+  drawPillButton('pause_resume', '▶  RESUME', null, bx, by, btnW, bh, false, true, () => {
+    state.phase = 'playing';
+  }, pauseFocus === 0);
+  by += bh + gap;
+
+  drawPillButton('pause_settings', '⚙  SETTINGS', null, bx, by, btnW, bh, false, false, () => {
+    openSettingsModal();
+  }, pauseFocus === 1);
+  by += bh + gap;
+
+  drawPillButton('pause_restart', '↻  RESTART', null, bx, by, btnW, bh, false, false, () => {
+    startGame();
+  }, pauseFocus === 2);
+  by += bh + gap;
+
+  drawPillButton('pause_title', '⌂  TITLE MENU', null, bx, by, btnW, bh, false, false, () => {
+    state.phase = 'title';
+    secretSuperSpeedMode = false;
+  }, pauseFocus === 3);
+
+  ctx.restore();
+}
+
+function drawGameOverOverlay() {
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  ctx.save();
+  drawFullScreenMenuBackdrop();
+
+  const topY = isPortrait ? 68 : 48;
+  const isZenLoss = !state.victory && (zenMode || state.zenRun);
+
+  if (state.victory) {
+    drawBlockyLogo(W / 2, topY, Math.min(W - 44, 660), 'ALL CLEAR', 'palette');
+  } else if (isZenLoss) {
+    drawBlockyLogo(W / 2, topY, Math.min(W - 44, 660), "IT'S OKAY", 'palette');
+  } else {
+    drawBlockyLogo(W / 2, topY, Math.min(W - 44, 720), 'DISCONNECTED', 'red');
+    ctx.textAlign = 'center';
+    ctx.font = '800 18px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillStyle = bw ? '#ffffff' : (isMonoTheme() ? pal.accent : '#ff335c');
+    ctx.fillText('G  A  M  E     O  V  E  R', W / 2, topY + 96);
+  }
+
+  const statsY = topY + (state.victory || isZenLoss ? 108 : 124);
+  ctx.textAlign = 'center';
+  if (!zenMode && !state.zenRun) {
+    ctx.font = '800 28px ui-monospace, monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`SCORE  ${state.score.toLocaleString()}`, W / 2, statsY);
+
+    if (state.victory && !endlessMode) {
+      const grade = computeGrade(state.score, state.lineGoal);
+      ctx.font = '800 16px ui-monospace, monospace';
+      ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+      ctx.fillText(`GRADE ${grade}   ·   ${state.lines} LINES   ·   ${formatTime(state.time)}`, W / 2, statsY + 28);
+    } else {
+      ctx.font = '600 14px ui-monospace, monospace';
+      ctx.fillStyle = bw ? '#ffffff' : 'rgba(180,210,255,0.8)';
+      ctx.fillText(`LEVEL ${state.level}   ·   ${state.lines} LINES   ·   ${formatTime(state.time)}`, W / 2, statsY + 28);
+    }
+  } else {
+    ctx.font = '700 16px ui-monospace, monospace';
+    ctx.fillStyle = bw ? '#ffffff' : pal.accent;
+    ctx.fillText(`ZEN RUN   ·   ${state.lines} LINES CLEARED`, W / 2, statsY + 12);
+  }
+
+  const btnW = Math.min(W - 64, 340);
+  const bx = Math.floor((W - btnW) / 2);
+  let by = statsY + 62;
+  const bh = 54;
+  const gap = 12;
+
+  drawPillButton('go_retry', '↻  PLAY AGAIN', null, bx, by, btnW, bh, false, true, () => {
+    startGame();
+  }, gameOverFocus === 0);
+  by += bh + gap;
+
+  drawPillButton('go_settings', '⚙  SETTINGS', null, bx, by, btnW, bh, false, false, () => {
+    openSettingsModal();
+  }, gameOverFocus === 1);
+  by += bh + gap;
+
+  drawPillButton('go_scores', '🏆  HIGH SCORES', null, bx, by, btnW, bh, false, false, () => {
+    highScoresScrollY = 0;
+    highScoresOpen = true;
+  }, gameOverFocus === 2);
+  by += bh + gap;
+
+  drawPillButton('go_title', '⌂  TITLE MENU', null, bx, by, btnW, bh, false, false, () => {
+    state.phase = 'title';
+    secretSuperSpeedMode = false;
+  }, gameOverFocus === 3);
+
+  ctx.restore();
+}
+
+function drawMatrixTerminalOverlay() {
+  if (!matrixTerminalActive) return;
+  const bw = isBwTheme();
+  const mono = isMonoTheme();
+  const pal = PALETTES[settings.paletteIdx];
+
+  ctx.save();
+
+  // Theme-aware backdrop
+  if (settings.oled || bw) {
+    ctx.fillStyle = '#000000';
+  } else if (mono) {
+    ctx.fillStyle = shadeHex(pal.accent, -0.94);
+  } else {
+    ctx.fillStyle = shadeHex(pal.accent, -0.88);
+  }
+  ctx.fillRect(0, 0, W, H);
+
+  for (const c of matrixColumns) {
+    const cells = ROTATIONS[c.type][c.rot];
+    const color = bw ? '#ffffff' : SHAPES[c.type].color;
+    for (const [cx, cy] of cells) {
+      drawBlock(c.x + cx * 14, c.y + cy * 14, 14, color, false, true);
+    }
+  }
+
+  // Hint text — fades after 7 s of inactivity, returns on user activity
+  if (matrixHintAlpha > 0.001) {
+    ctx.save();
+    ctx.globalAlpha = matrixHintAlpha;
+    ctx.textAlign = 'center';
+    ctx.font = '800 18px ui-monospace, monospace';
+    ctx.fillStyle = bw
+      ? '#ffffff'
+      : (mono ? pal.accent : shadeHex(pal.accent, 0.35));
+    ctx.fillText('SYSTEM OVERLOAD  ·  PRESS ANY KEY OR TAP TO EXIT', W / 2, H - 36);
+    ctx.restore();
+  }
+
+  registerButton('matrix_exit', 0, 0, W, H, () => {
+    matrixTerminalActive = false;
+    matrixColumns = [];
+  });
+
+  ctx.restore();
+}
+
+function drawRickrollFullScreen() {
+  if (!rickrollActive) return;
+  const pal = PALETTES[settings.paletteIdx];
+  const bw = isBwTheme();
+  const curNote = RICKROLL_MELODY[rickrollNoteIdx] || RICKROLL_MELODY[0];
+  const activeLine = curNote.line || 0;
+
+  ctx.save();
+  ctx.fillStyle = (settings.oled || bw) ? '#000000' : '#050814';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = bw ? '#ffffff' : pal.accent;
+  ctx.lineWidth = 2.5;
+  ctx.strokeRect(6, 6, W - 12, H - 12);
+
+  const startY = isPortrait ? 90 : 58;
+  const lineGap = isPortrait ? 36 : 32;
+
+  for (let i = 0; i < RICKROLL_LYRICS.length; i++) {
+    const isCurrent = i === activeLine;
+    const isPast = i < activeLine;
+    ctx.textAlign = 'center';
+    ctx.font = `${isCurrent ? '900' : '700'} ${isPortrait ? (isCurrent ? 18 : 15) : (isCurrent ? 24 : 19)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    if (bw) {
+      ctx.fillStyle = isCurrent ? '#ffffff' : (isPast ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.35)');
+    } else {
+      ctx.fillStyle = isCurrent
+        ? pal.accent
+        : (isPast ? '#ffffff' : 'rgba(170,200,255,0.38)');
+    }
+    const bounce = isCurrent ? Math.sin(uiTime * 18) * 3 : 0;
+    ctx.fillText(RICKROLL_LYRICS[i], W / 2, startY + i * lineGap + bounce);
+  }
+
+  const frameIdx = Math.floor(uiTime * 6.5) % RICK_ASCII_FRAMES.length;
+  const frame = RICK_ASCII_FRAMES[frameIdx];
+  const asciiStartY = startY + RICKROLL_LYRICS.length * lineGap + (isPortrait ? 38 : 26);
+  const asciiLineH = isPortrait ? 20 : 19;
+  const swayX = Math.sin(uiTime * 6.5) * 14;
+
+  ctx.textAlign = 'center';
+  ctx.font = `700 ${isPortrait ? 16 : 16}px ui-monospace, SFMono-Regular, Menlo, Courier, monospace`;
+  ctx.fillStyle = bw ? '#ffffff' : pal.secondary;
+
+  for (let r = 0; r < frame.length; r++) {
+    ctx.fillText(frame[r], W / 2 + swayX, asciiStartY + r * asciiLineH);
+  }
+
+  const floorY = asciiStartY + frame.length * asciiLineH + 6;
+  ctx.strokeStyle = bw ? '#ffffff' : hexToRgba(pal.accent, 0.5);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 140, floorY);
+  ctx.lineTo(W / 2 + 140, floorY);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawNoZenIntroOverlay() {
+  if (!noZenIntroActive) return;
+  const bw = isBwTheme();
+  ctx.save();
+  const flash = Math.sin(uiTime * 28) > 0;
+  ctx.fillStyle = bw ? '#000000' : (flash ? '#190006' : '#050002');
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = bw ? '#ffffff' : '#ff1f4b';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(6, 6, W - 12, H - 12);
+
+  const shakeX = (Math.random() - 0.5) * 8;
+  const shakeY = (Math.random() - 0.5) * 8;
+
+  drawBlockyLogo(W / 2 + shakeX, Math.floor(H / 2 - 60 + shakeY), Math.min(W - 40, 760), 'NOZEN ANYMORE', 'red', 14);
+
+  ctx.textAlign = 'center';
+  ctx.font = '900 22px ui-monospace, monospace';
+  ctx.fillStyle = bw ? '#ffffff' : '#ff2e55';
+  ctx.fillText('MAXIMUM SPEED   ·   ONLY S-BLOCKS', W / 2, Math.floor(H / 2 + 54));
+
+  ctx.font = '800 16px ui-monospace, monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`LAUNCHING IN ${Math.max(1, Math.ceil(noZenIntroTimer))}...`, W / 2, Math.floor(H / 2 + 92));
+
+  ctx.restore();
+}
+
+function getGameplayClusterTransform() {
+  const rawS = getActiveAppScale();
+  const clusterW = isPortrait ? (BOARD_W + 190) : (BOARD_W + 390);
+  const clusterH = isPortrait ? (BOARD_H + 90) : (BOARD_H + 60);
+  const showTouch = isTouchVisible();
+  const availW = W - 16;
+  const availH = showTouch && isPortrait ? (H - 300) : (H - 70);
+  const maxSafeScale = Math.max(0.5, Math.min(availW / clusterW, availH / clusterH));
+  const effScale = Math.min(rawS, maxSafeScale);
+  const cx = BOARD_X + BOARD_W / 2;
+  const cy = BOARD_Y + BOARD_H / 2;
+  return { scale: effScale, cx, cy };
+}
+
+function render() {
+  uiButtons = [];
+
+  if (rickrollActive) {
+    drawRickrollFullScreen();
+    return;
+  }
+
+  if (noZenIntroActive) {
+    drawNoZenIntroOverlay();
+    return;
+  }
+
+  if (matrixTerminalActive) {
+    drawMatrixTerminalOverlay();
+    return;
+  }
+
+  if (touchEditorOpen) {
+    drawTouchLayoutEditorModal();
+    return;
+  }
+
+  if (firstRunNameOpen) {
+    drawFirstRunNameModal();
+    return;
+  }
+
+  if (settingsOpen) {
+    drawSettingsModal();
+    return;
+  }
+
+  if (highScoresOpen) {
+    drawHighScoresModal();
+    return;
+  }
+
+  if (highScorePromptOpen) {
+    drawHighScorePromptModal();
+    return;
+  }
+
+  if (state.phase === 'title') {
+    drawTitleOverlay();
+    return;
+  }
+
+  if (state.phase === 'paused') {
+    drawPauseOverlay();
+    return;
+  }
+
+  if (state.phase === 'gameover') {
+    drawGameOverOverlay();
+    return;
+  }
+
+  drawBackground();
+
+  const tr = getGameplayClusterTransform();
+  ctx.save();
+  ctx.translate(tr.cx, tr.cy);
+  ctx.scale(tr.scale, tr.scale);
+  ctx.translate(-tr.cx, -tr.cy);
+
+  drawBoard();
+  drawHoldPanel();
+  drawNextPanel();
+  if (CONFIG.zoneEnabled) drawFocusGauge();
+  drawStats();
+  drawToast();
+
+  if (state.phase === 'countdown') {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = '800 110px system-ui, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(String(Math.max(1, Math.ceil(state.countdown))), BOARD_X + BOARD_W / 2, BOARD_Y + BOARD_H / 2 + 38);
+    ctx.restore();
+  }
+
+  ctx.restore();
+
+  drawPortraitTopStatsBar();
+  drawHudTopButtons();
+  drawTouchControls();
+
+  if (state.zoneFlash > 0 && !isBwTheme()) {
+    ctx.save();
+    ctx.globalAlpha = state.zoneFlash * 0.2;
+    ctx.fillStyle = PALETTES[settings.paletteIdx].zone;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+}
+
+/* =========================================================
+   INPUT — POINTER, TOUCH, KEYBOARD, GAMEPAD & BACK GUARD
+   ========================================================= */
+function recordBackSpam() {
+  if (rickrollActive || noZenIntroActive) return false;
+  const now = performance.now();
+  if (now - backSpamTimer > 1800) backSpamCount = 0;
+  backSpamCount++;
+  backSpamTimer = now;
+  if (backSpamCount >= 5) {
+    backSpamCount = 0;
+    matrixTerminalActive = true;
+    matrixTimer = 0;
+    matrixColumns = [];
+    matrixInactivityTimer = 0;
+    matrixHintAlpha = 1;
+    return true;
+  }
+  return false;
+}
+
+function handleBackNavigation() {
+  if (rickrollActive || noZenIntroActive) return true;
+
+  // Exit Matrix first — never let a back-spam re-arm it while it's on.
+  if (matrixTerminalActive) {
+    matrixTerminalActive = false;
+    matrixColumns = [];
+    return true;
+  }
+
+  if (recordBackSpam()) return true;
+  if (touchEditorOpen) {
+    touchEditorOpen = false;
+    draggingTouchBtnId = null;
+    saveSettings();
+    return true;
+  }
+  if (settingsOpen) {
+    cancelSettingsModal();
+    return true;
+  }
+  if (highScoresOpen) {
+    highScoresOpen = false;
+    return true;
+  }
+  if (highScorePromptOpen) {
+    highScorePromptOpen = false;
+    closeTextInput();
+    return true;
+  }
+  if (state.phase === 'playing') {
+    state.phase = 'paused';
+    pauseFocus = 0;
+    return true;
+  }
+  if (state.phase === 'paused') {
+    state.phase = 'playing';
+    return true;
+  }
+  if (state.phase === 'gameover') {
+    state.phase = 'title';
+    secretSuperSpeedMode = false;
+    return true;
+  }
+  return false;
+}
+
+try {
+  history.pushState({ disconnectedGuard: true }, '');
+  window.addEventListener('popstate', () => {
+    handleBackNavigation();
+    try { history.pushState({ disconnectedGuard: true }, ''); } catch (_) {}
+  });
+} catch (_) {}
+document.addEventListener('backbutton', e => {
+  e.preventDefault();
+  handleBackNavigation();
+}, false);
+
+function canvasCoords(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (W / Math.max(1, rect.width)),
+    y: (clientY - rect.top) * (H / Math.max(1, rect.height)),
+  };
+}
+
+function updateScaleFromPointer(px) {
+  const r = dragSliderTrack || scaleSliderRect;
+  if (!r) return;
+  const pct = Math.max(0, Math.min(1, (px - r.x) / Math.max(1, r.w)));
+  const raw = 50 + pct * 450;
+  settings.appScale = Math.max(50, Math.min(500, Math.round(raw / 5) * 5));
+}
+
+function triggerTouchAction(action) {
+  if (state.phase !== 'playing') return;
+  if (action === 'cw') rotate(1);
+  else if (action === 'ccw') rotate(-1);
+  else if (action === 'drop') hardDrop();
+  else if (action === 'hold') holdPiece();
+  else if (action === 'zone') activateFocus();
+}
+
+function isPointOnTextInput(x, y) {
+  const inputBoxIds = ['hsp_name_box', 'set_defname_input', 'first_name_box'];
+  for (const b of uiButtons) {
+    if (inputBoxIds.includes(b.id) && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      return true;
+    }
+  }
+  return false;
+}
+
+canvas.addEventListener('mousedown', e => {
+  const { x, y } = canvasCoords(e.clientX, e.clientY);
+
+  if (textInputTarget) {
+    if (isPointOnTextInput(x, y)) {
+      e.preventDefault();
+    } else {
+      closeTextInput();
+    }
+  }
+
+  if (touchEditorOpen) {
+    for (let i = uiButtons.length - 1; i >= 0; i--) {
+      const b = uiButtons[i];
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        b.onClick();
+        return;
+      }
+    }
+    for (let i = touchPadButtons.length - 1; i >= 0; i--) {
+      const tb = touchPadButtons[i];
+      if (x >= tb.x && x <= tb.x + tb.w && y >= tb.y && y <= tb.y + tb.h) {
+        draggingTouchBtnId = tb.id;
+        dragTouchOffsetX = x - tb.x;
+        dragTouchOffsetY = y - tb.y;
+        return;
+      }
+    }
+    return;
+  }
+
+  if (settingsOpen && scaleSliderRect) {
+    const r = scaleSliderRect;
+    if (x >= r.x - 10 && x <= r.x + r.w + 10 && y >= r.y && y <= r.y + r.h) {
+      draggingScaleSlider = true;
+      dragSliderTrack = { ...r };
+      settingsFocus = 10;
+      updateScaleFromPointer(x);
+      return;
+    }
+  }
+
+  let startedDragInViewport = false;
+  if (settingsOpen && settingsViewport) {
+    const vp = settingsViewport;
+    if (x >= vp.x && x <= vp.x + vp.w && y >= vp.y && y <= vp.y + vp.h) {
+      draggingSettingsList = true;
+      settingsDragStartY = y;
+      settingsDragStartScroll = settingsScrollY;
+      settingsDragMoved = false;
+      startedDragInViewport = true;
+    }
+  }
+
+  for (let i = uiButtons.length - 1; i >= 0; i--) {
+    const b = uiButtons[i];
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      if (b._isListButton && settingsViewport) {
+        const vp = settingsViewport;
+        if (y < vp.y || y > vp.y + vp.h) continue;
+      }
+      if (startedDragInViewport) {
+        pendingSettingsButton = b;
+        return;
+      }
+      b.onClick();
+      return;
+    }
+  }
+
+  if (isTouchVisible() && state.phase === 'playing') {
+    for (const tb of touchPadButtons) {
+      if (x >= tb.x && x <= tb.x + tb.w && y >= tb.y && y <= tb.y + tb.h) {
+        if (tb.hold) touchHeld[tb.hold] = true;
+        if (tb.action) triggerTouchAction(tb.action);
+        return;
+      }
+    }
+  }
+});
+
+window.addEventListener('mousemove', e => {
+  if (matrixTerminalActive) matrixInteract();
+
+  const { x, y } = canvasCoords(e.clientX, e.clientY);
+
+  if (touchEditorOpen && draggingTouchBtnId) {
+    const tb = touchPadButtons.find(b => b.id === draggingTouchBtnId);
+    if (tb) {
+      const nx = Math.max(4, Math.min(W - tb.w - 4, x - dragTouchOffsetX)) / W;
+      const ny = Math.max(4, Math.min(H - tb.h - 4, y - dragTouchOffsetY)) / H;
+      const orientKey = isPortrait ? 'portrait' : 'landscape';
+      if (!customTouchPositions[orientKey]) customTouchPositions[orientKey] = {};
+      customTouchPositions[orientKey][tb.id] = { nx, ny };
+    }
+    return;
+  }
+
+  if (draggingScaleSlider) {
+    updateScaleFromPointer(x);
+    return;
+  }
+
+  if (draggingSettingsList) {
+    const dy = y - settingsDragStartY;
+    if (Math.abs(dy) > 5) settingsDragMoved = true;
+    settingsScrollY = Math.max(0, Math.min(settingsMaxScroll, settingsDragStartScroll - dy));
+    return;
+  }
+
+  hoverBtnId = null;
+  for (let i = uiButtons.length - 1; i >= 0; i--) {
+    const b = uiButtons[i];
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      hoverBtnId = b.id;
+      break;
+    }
+  }
+});
+
+window.addEventListener('mouseup', e => {
+  if (pendingSettingsButton) {
+    if (!settingsDragMoved) {
+      const { x, y } = canvasCoords(e.clientX, e.clientY);
+      const b = pendingSettingsButton;
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        if (!b._isListButton || !settingsViewport ||
+            (y >= settingsViewport.y && y <= settingsViewport.y + settingsViewport.h)) {
+          b.onClick();
+        }
+      }
+    }
+    pendingSettingsButton = null;
+  }
+  draggingScaleSlider = false;
+  dragSliderTrack = null;
+  draggingSettingsList = false;
+  settingsDragMoved = false;
+  draggingTouchBtnId = null;
+  touchHeld.left = touchHeld.right = touchHeld.down = false;
+});
+
+canvas.addEventListener('wheel', e => {
+  if (settingsOpen) {
+    e.preventDefault();
+    settingsScrollY = Math.max(0, Math.min(settingsMaxScroll, settingsScrollY + e.deltaY * 0.6));
+  } else if (highScoresOpen) {
+    e.preventDefault();
+    highScoresScrollY = Math.max(0, Math.min(highScoresMaxScroll, highScoresScrollY + e.deltaY * 0.6));
+  }
+}, { passive: false });
+
+function syncActiveTouches(touches) {
+  touchHeld.left = touchHeld.right = touchHeld.down = false;
+  if (!isTouchVisible() || state.phase !== 'playing') return;
+  for (let i = 0; i < touches.length; i++) {
+    const { x, y } = canvasCoords(touches[i].clientX, touches[i].clientY);
+    for (const tb of touchPadButtons) {
+      if (tb.hold && x >= tb.x && x <= tb.x + tb.w && y >= tb.y && y <= tb.y + tb.h) {
+        touchHeld[tb.hold] = true;
+      }
+    }
+  }
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  lastInputDevice = 'touch';
+  requestMotionPermissionIfNeeded();
+
+  const touch = e.changedTouches[0];
+  if (!touch) return;
+  const { x, y } = canvasCoords(touch.clientX, touch.clientY);
+
+  if (textInputTarget) {
+    if (!isPointOnTextInput(x, y)) {
+      closeTextInput();
+    }
+  }
+
+  if (touchEditorOpen) {
+    for (let i = uiButtons.length - 1; i >= 0; i--) {
+      const b = uiButtons[i];
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        b.onClick();
+        return;
+      }
+    }
+    for (let i = touchPadButtons.length - 1; i >= 0; i--) {
+      const tb = touchPadButtons[i];
+      if (x >= tb.x && x <= tb.x + tb.w && y >= tb.y && y <= tb.y + tb.h) {
+        draggingTouchBtnId = tb.id;
+        dragTouchOffsetX = x - tb.x;
+        dragTouchOffsetY = y - tb.y;
+        return;
+      }
+    }
+    return;
+  }
+
+  if (settingsOpen && scaleSliderRect) {
+    const r = scaleSliderRect;
+    if (x >= r.x - 12 && x <= r.x + r.w + 12 && y >= r.y && y <= r.y + r.h) {
+      draggingScaleSlider = true;
+      dragSliderTrack = { ...r };
+      settingsFocus = 10;
+      updateScaleFromPointer(x);
+      return;
+    }
+  }
+
+  let startedDragInViewport = false;
+  if (settingsOpen && settingsViewport) {
+    const vp = settingsViewport;
+    if (x >= vp.x && x <= vp.x + vp.w && y >= vp.y && y <= vp.y + vp.h) {
+      draggingSettingsList = true;
+      settingsDragStartY = y;
+      settingsDragStartScroll = settingsScrollY;
+      settingsDragMoved = false;
+      startedDragInViewport = true;
+    }
+  }
+
+  for (let i = uiButtons.length - 1; i >= 0; i--) {
+    const b = uiButtons[i];
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      if (b._isListButton && settingsViewport) {
+        const vp = settingsViewport;
+        if (y < vp.y || y > vp.y + vp.h) continue;
+      }
+      if (startedDragInViewport) {
+        pendingSettingsButton = b;
+        return;
+      }
+      b.onClick();
+      return;
+    }
+  }
+
+  if (state.phase === 'playing') {
+    for (let tIdx = 0; tIdx < e.changedTouches.length; tIdx++) {
+      const pt = canvasCoords(e.changedTouches[tIdx].clientX, e.changedTouches[tIdx].clientY);
+      for (const tb of touchPadButtons) {
+        if (tb.action && pt.x >= tb.x && pt.x <= tb.x + tb.w && pt.y >= tb.y && pt.y <= tb.y + tb.h) {
+          triggerTouchAction(tb.action);
+        }
+      }
+    }
+    syncActiveTouches(e.touches);
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  if (!touch) return;
+  const { x, y } = canvasCoords(touch.clientX, touch.clientY);
+
+  if (touchEditorOpen && draggingTouchBtnId) {
+    const tb = touchPadButtons.find(b => b.id === draggingTouchBtnId);
+    if (tb) {
+      const nx = Math.max(4, Math.min(W - tb.w - 4, x - dragTouchOffsetX)) / W;
+      const ny = Math.max(4, Math.min(H - tb.h - 4, y - dragTouchOffsetY)) / H;
+      const orientKey = isPortrait ? 'portrait' : 'landscape';
+      if (!customTouchPositions[orientKey]) customTouchPositions[orientKey] = {};
+      customTouchPositions[orientKey][tb.id] = { nx, ny };
+    }
+    return;
+  }
+
+  if (draggingScaleSlider) {
+    updateScaleFromPointer(x);
+    return;
+  }
+
+  if (draggingSettingsList) {
+    const dy = y - settingsDragStartY;
+    if (Math.abs(dy) > 6) settingsDragMoved = true;
+    settingsScrollY = Math.max(0, Math.min(settingsMaxScroll, settingsDragStartScroll - dy));
+    return;
+  }
+
+  syncActiveTouches(e.touches);
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+
+  if (pendingSettingsButton) {
+    if (!settingsDragMoved) {
+      const touch = e.changedTouches[0];
+      if (touch) {
+        const { x, y } = canvasCoords(touch.clientX, touch.clientY);
+        const b = pendingSettingsButton;
+        if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+          if (!b._isListButton || !settingsViewport ||
+              (y >= settingsViewport.y && y <= settingsViewport.y + settingsViewport.h)) {
+            b.onClick();
+          }
+        }
+      }
+    }
+    pendingSettingsButton = null;
+  }
+
+  draggingScaleSlider = false;
+  dragSliderTrack = null;
+  draggingSettingsList = false;
+  settingsDragMoved = false;
+  draggingTouchBtnId = null;
+  syncActiveTouches(e.touches);
+}, { passive: false });
+
+// Device shake (mobile) re-shows the Matrix hint.
+window.addEventListener('devicemotion', e => {
+  if (!matrixTerminalActive) return;
+  let a = e.acceleration;
+  if (!a || (a.x === null && a.y === null && a.z === null)) {
+    a = e.accelerationIncludingGravity;
+  }
+  if (!a) return;
+  const mag = Math.sqrt((a.x||0)*(a.x||0) + (a.y||0)*(a.y||0) + (a.z||0)*(a.z||0));
+  const now = performance.now();
+  if (mag > 18 && now - matrixLastShakeTime > 250) {
+    matrixLastShakeTime = now;
+    matrixInteract();
+  }
+}, { passive: true });
+
+function handleMenuDpad(dir) {
+  if (firstRunNameOpen) {
+    if (dir === 'select') commitFirstRunUsername();
+    return;
+  }
+
+  if (touchEditorOpen) {
+    if (dir === 'back' || dir === 'select') {
+      touchEditorOpen = false;
+      saveSettings();
+    }
+    return;
+  }
+
+  if (settingsOpen) {
+    if (dir === 'back') { cancelSettingsModal(); return; }
+    if (dir === 'up') {
+      settingsFocus = (settingsFocus + 13) % 14;
+      ensureSettingsFocusVisible();
+    } else if (dir === 'down') {
+      settingsFocus = (settingsFocus + 1) % 14;
+      ensureSettingsFocusVisible();
+    } else if (dir === 'left' || dir === 'right') {
+      const step = dir === 'right' ? 1 : -1;
+      if (settingsFocus === 0) endlessMode = !endlessMode;
+      else if (settingsFocus === 1) { zenMode = !zenMode; triggerZenToggleEasterEggCheck(); }
+      else if (settingsFocus === 2) settings.assists = !settings.assists;
+      else if (settingsFocus === 3 && !endlessMode) adjustLineGoal(step);
+      else if (settingsFocus === 4) adjustStartLevel(step);
+      else if (settingsFocus === 5) settings.alwaysUseDefaultName = !settings.alwaysUseDefaultName;
+      else if (settingsFocus === 6) { settings.oled = !settings.oled; document.body.classList.toggle('oled-mode', settings.oled); }
+      else if (settingsFocus === 7) applyPalette(settings.paletteIdx + step);
+      else if (settingsFocus === 8 && isMonoTheme()) {
+        settings.monoAccentIdx = (settings.monoAccentIdx + step + MONO_ACCENTS.length) % MONO_ACCENTS.length;
+        updateMonoPaletteColors();
+        applyPalette(settings.paletteIdx);
+      } else if (settingsFocus === 9) {
+        const list = ['auto', 'landscape', 'portrait'];
+        settings.orientation = list[(list.indexOf(settings.orientation) + step + 3) % 3];
+        updateLayout();
+      } else if (settingsFocus === 10) {
+        settings.appScale = Math.max(50, Math.min(500, settings.appScale + step * 5));
+      } else if (settingsFocus === 11) {
+        const list = ['auto', 'on', 'off'];
+        settings.touchControls = list[(list.indexOf(settings.touchControls) + step + 3) % 3];
+        updateLayout();
+      } else if (settingsFocus === 12 || settingsFocus === 13) {
+        settingsFocus = settingsFocus === 12 ? 13 : 12;
+      }
+    } else if (dir === 'select') {
+      if (settingsFocus === 0) endlessMode = !endlessMode;
+      else if (settingsFocus === 1) { zenMode = !zenMode; triggerZenToggleEasterEggCheck(); }
+      else if (settingsFocus === 2) settings.assists = !settings.assists;
+      else if (settingsFocus === 5) {
+        if (textInputTarget === 'defaultName') closeTextInput();
+        else openTextInput('defaultName');
+      } else if (settingsFocus === 6) { settings.oled = !settings.oled; document.body.classList.toggle('oled-mode', settings.oled); }
+      else if (settingsFocus === 11) { touchEditorOpen = true; }
+      else if (settingsFocus === 12) saveAndCloseSettingsModal();
+      else if (settingsFocus === 13) cancelSettingsModal();
+    }
+    return;
+  }
+
+  if (highScoresOpen) {
+    if (dir === 'up') highScoresScrollY = Math.max(0, highScoresScrollY - 40);
+    else if (dir === 'down') highScoresScrollY = Math.min(highScoresMaxScroll, highScoresScrollY + 40);
+    else if (dir === 'select' || dir === 'back') highScoresOpen = false;
+    return;
+  }
+
+  if (highScorePromptOpen) {
+    if (dir === 'up' || dir === 'left') hsPromptFocus = (hsPromptFocus + 2) % 3;
+    else if (dir === 'down' || dir === 'right') hsPromptFocus = (hsPromptFocus + 1) % 3;
+    else if (dir === 'select') {
+      if (hsPromptFocus === 0) openTextInput('hsName');
+      else if (hsPromptFocus === 1) commitHighScoreRecord();
+      else { highScorePromptOpen = false; closeTextInput(); }
+    } else if (dir === 'back') {
+      highScorePromptOpen = false;
+      closeTextInput();
+    }
+    return;
+  }
+
+  if (state.phase === 'title') {
+    if (dir === 'up') titleFocus = (titleFocus + 7) % 8;
+    else if (dir === 'down') titleFocus = (titleFocus + 1) % 8;
+    else if (dir === 'left' || dir === 'right') {
+      const step = dir === 'right' ? 1 : -1;
+      if (titleFocus <= 2) titleFocus = (titleFocus + step + 3) % 3;
+      else if (titleFocus === 3 && !endlessMode) adjustLineGoal(step);
+      else if (titleFocus === 4) { adjustStartLevel(step); saveSettings(); }
+      else if (titleFocus >= 5) {
+        const order = [6, 5, 7];
+        const curIdx = Math.max(0, order.indexOf(titleFocus));
+        titleFocus = order[(curIdx + step + 3) % 3];
+      }
+    } else if (dir === 'select') {
+      if (titleFocus === 0) { endlessMode = false; saveSettings(); }
+      else if (titleFocus === 1) { endlessMode = true; saveSettings(); }
+      else if (titleFocus === 2) { zenMode = !zenMode; triggerZenToggleEasterEggCheck(); saveSettings(); }
+      else if (titleFocus === 5) startGame();
+      else if (titleFocus === 6) { highScoresScrollY = 0; highScoresOpen = true; }
+      else if (titleFocus === 7) openSettingsModal();
+    }
+    return;
+  }
+
+  if (state.phase === 'paused') {
+    if (dir === 'up') pauseFocus = (pauseFocus + 3) % 4;
+    else if (dir === 'down') pauseFocus = (pauseFocus + 1) % 4;
+    else if (dir === 'select') {
+      if (pauseFocus === 0) state.phase = 'playing';
+      else if (pauseFocus === 1) openSettingsModal();
+      else if (pauseFocus === 2) startGame();
+      else if (pauseFocus === 3) { state.phase = 'title'; secretSuperSpeedMode = false; }
+    } else if (dir === 'back') {
+      state.phase = 'playing';
+    }
+    return;
+  }
+
+  if (state.phase === 'gameover') {
+    if (dir === 'up') gameOverFocus = (gameOverFocus + 3) % 4;
+    else if (dir === 'down') gameOverFocus = (gameOverFocus + 1) % 4;
+    else if (dir === 'select') {
+      if (gameOverFocus === 0) startGame();
+      else if (gameOverFocus === 1) openSettingsModal();
+      else if (gameOverFocus === 2) { highScoresScrollY = 0; highScoresOpen = true; }
+      else if (gameOverFocus === 3) { state.phase = 'title'; secretSuperSpeedMode = false; }
+    } else if (dir === 'back') {
+      state.phase = 'title';
+      secretSuperSpeedMode = false;
+    }
+  }
+}
+
+window.addEventListener('keydown', e => {
+  lastInputDevice = 'keyboard';
+  const code = e.code;
+
+  if (rickrollActive || noZenIntroActive) {
+    e.preventDefault();
+    return;
+  }
+
+  if (matrixTerminalActive) {
+    e.preventDefault();
+    matrixTerminalActive = false;
+    matrixColumns = [];
+    return;
+  }
+
+  if (textInputTarget) {
+    // Keep the hidden input focused, in case the browser blurred it.
+    if (document.activeElement !== hiddenInput) {
+      try {
+        hiddenInput.focus();
+        hiddenInput.setSelectionRange(hiddenInput.value.length, hiddenInput.value.length);
+      } catch (_) {}
+    }
+    if (code === 'Enter') {
+      e.preventDefault();
+      if (firstRunNameOpen) commitFirstRunUsername();
+      else if (highScorePromptOpen) commitHighScoreRecord();
+      else closeTextInput();
+      return;
+    }
+    if (code === 'Escape') {
+      e.preventDefault();
+      const wasDefault = textInputTarget === 'defaultName';
+      closeTextInput();
+      if (!wasDefault) handleBackNavigation();
+      return;
+    }
+    return;
+  }
+
+  if (code === 'Escape' || code === 'BrowserBack') {
+    e.preventDefault();
+    handleBackNavigation();
+    return;
+  }
+
+  const inMenu = firstRunNameOpen || touchEditorOpen || settingsOpen || highScoresOpen || highScorePromptOpen ||
+    state.phase === 'title' || state.phase === 'paused' || state.phase === 'gameover';
+
+  if (inMenu) {
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Enter'].includes(code)) {
+      e.preventDefault();
+    }
+    if (code === 'ArrowUp' || code === 'KeyW') handleMenuDpad('up');
+    else if (code === 'ArrowDown' || code === 'KeyS') handleMenuDpad('down');
+    else if (code === 'ArrowLeft' || code === 'KeyA') handleMenuDpad('left');
+    else if (code === 'ArrowRight' || code === 'KeyD') handleMenuDpad('right');
+    else if (code === 'Enter' || code === 'Space') handleMenuDpad('select');
+    return;
+  }
+
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','KeyP','KeyR','KeyC','KeyQ','KeyZ','KeyX'].includes(code)) {
+    e.preventDefault();
+  }
+
+  if (e.repeat) return;
+
+  if (code === 'KeyP') {
+    if (state.phase === 'playing') { state.phase = 'paused'; pauseFocus = 0; }
+    else if (state.phase === 'paused') state.phase = 'playing';
+    return;
+  }
+  if (code === 'KeyR') { startGame(); return; }
+
+  if (state.phase !== 'playing') return;
+
+  switch (code) {
+    case 'ArrowLeft': case 'KeyA': kb.left = true; break;
+    case 'ArrowRight': case 'KeyD': kb.right = true; break;
+    case 'ArrowDown': case 'KeyS': kb.down = true; break;
+    case 'ArrowUp': case 'KeyX': case 'KeyW': rotate(1); break;
+    case 'KeyZ': case 'ControlLeft': case 'ControlRight': rotate(-1); break;
+    case 'Space': hardDrop(); break;
+    case 'KeyC': case 'ShiftLeft': case 'ShiftRight': holdPiece(); break;
+    case 'KeyQ': case 'KeyE': activateFocus(); break;
+  }
+});
+
+window.addEventListener('keyup', e => {
+  switch (e.code) {
+    case 'ArrowLeft': case 'KeyA': kb.left = false; break;
+    case 'ArrowRight': case 'KeyD': kb.right = false; break;
+    case 'ArrowDown': case 'KeyS': kb.down = false; break;
+  }
+});
+
+window.addEventListener('blur', () => {
+  kb.left = kb.right = kb.down = false;
+  touchHeld.left = touchHeld.right = touchHeld.down = false;
+  if (state.phase === 'playing') state.phase = 'paused';
+});
+
+/* =========================================================
+   INPUT — GAMEPAD
+   ========================================================= */
+let gpIndex = null;
+let gpPrev = [];
+let gpMenuRepeatTimer = 0;
+
+window.addEventListener('gamepadconnected', e => {
+  gpIndex = e.gamepad.index;
+  gpPrev = [];
+});
+window.addEventListener('gamepaddisconnected', e => {
+  if (gpIndex === e.gamepad.index) {
+    gpIndex = null;
+    gpPrev = [];
+  }
+});
+
+function pollGamepad(dt) {
+  gpb.left = gpb.right = gpb.down = false;
+
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  if (gpIndex !== null) gp = pads[gpIndex];
+  if (!gp || !gp.connected) {
+    gp = null;
+    for (const p of pads) {
+      if (p && p.connected) { gp = p; gpIndex = p.index; break; }
+    }
+  }
+  if (!gp) { gpPrev = []; return; }
+
+  const btn = i => {
+    const b = gp.buttons[i];
+    return !!b && (b.pressed || b.value > 0.5);
+  };
+  const pressed = i => btn(i) && !gpPrev[i];
+
+  const anyBtn = gp.buttons.some(b => b.pressed || b.value > 0.5);
+  const anyAxis = gp.axes.some(a => Math.abs(a) > 0.35);
+  if (anyBtn || anyAxis) lastInputDevice = 'gamepad';
+
+  if (rickrollActive || noZenIntroActive) {
+    gpPrev = gp.buttons.map(b => b.pressed || b.value > 0.5);
+    return;
+  }
+
+  // Matrix terminal: any button exits, stick activity restores the hint.
+  if (matrixTerminalActive) {
+    if (gp.axes.some(a => Math.abs(a) > 0.35)) matrixInteract();
+    if (anyBtn) {
+      matrixTerminalActive = false;
+      matrixColumns = [];
+    }
+    gpPrev = gp.buttons.map(b => b.pressed || b.value > 0.5);
+    return;
+  }
+
+  const rx = gp.axes[2] || 0;
+  const ry = gp.axes[3] || 0;
+  if (Math.abs(ry) > 0.25) {
+    if (settingsOpen) {
+      settingsScrollY = Math.max(0, Math.min(settingsMaxScroll, settingsScrollY + ry * 420 * dt));
+    } else if (highScoresOpen) {
+      highScoresScrollY = Math.max(0, Math.min(highScoresMaxScroll, highScoresScrollY + ry * 420 * dt));
+    }
+  }
+
+  const inMenu = firstRunNameOpen || touchEditorOpen || settingsOpen || highScoresOpen || highScorePromptOpen ||
+    state.phase === 'title' || state.phase === 'paused' || state.phase === 'gameover';
+
+  if (inMenu) {
+    const lx = gp.axes[0] || 0;
+    const ly = gp.axes[1] || 0;
+    let stickDir = null;
+    if (ly < -0.5) stickDir = 'up';
+    else if (ly > 0.5) stickDir = 'down';
+    else if (lx < -0.5) stickDir = 'left';
+    else if (lx > 0.5) stickDir = 'right';
+
+    if (stickDir) {
+      gpMenuRepeatTimer -= dt;
+      if (gpMenuRepeatTimer <= 0) {
+        handleMenuDpad(stickDir);
+        gpMenuRepeatTimer = 0.18;
+      }
+    } else {
+      gpMenuRepeatTimer = 0;
+    }
+
+    if (pressed(12)) handleMenuDpad('up');
+    if (pressed(13)) handleMenuDpad('down');
+    if (pressed(14)) handleMenuDpad('left');
+    if (pressed(15)) handleMenuDpad('right');
+    if (pressed(0) || pressed(9)) handleMenuDpad('select');
+    if (pressed(1)) handleBackNavigation();
+
+    gpPrev = gp.buttons.map(b => b.pressed || b.value > 0.5);
+    return;
+  }
+
+  if (pressed(9)) {
+    if (state.phase === 'playing') { state.phase = 'paused'; pauseFocus = 0; }
+    else if (state.phase === 'paused') state.phase = 'playing';
+  }
+  if (pressed(8)) startGame();
+
+  if (state.phase === 'playing') {
+    gpb.left  = btn(14) || (gp.axes[0] || 0) < -0.45;
+    gpb.right = btn(15) || (gp.axes[0] || 0) >  0.45;
+    gpb.down  = btn(13) || (gp.axes[1] || 0) >  0.45;
+
+    if (pressed(12)) hardDrop();
+    if (pressed(0)) rotate(-1);
+    if (pressed(1)) rotate(1);
+    if (pressed(4) || pressed(5)) holdPiece();
+    if (pressed(6) || pressed(7)) activateFocus();
+  }
+
+  gpPrev = gp.buttons.map(b => b.pressed || b.value > 0.5);
+}
+
+/* =========================================================
+   FLOW & MAIN LOOP
+   ========================================================= */
+function adjustStartLevel(d) {
+  startLevel = Math.max(1, Math.min(CONFIG.levelCap, startLevel + d));
+}
+
+function startGame() {
+  // Clear any transient full-screen overlays that could otherwise block the run.
+  matrixTerminalActive = false;
+  matrixColumns = [];
+  matrixInactivityTimer = 0;
+  matrixHintAlpha = 1;
+  rickrollActive = false;
+  rickrollNoteIdx = 0;
+  rickrollNoteTimer = 0;
+  noZenIntroActive = false;
+  touchEditorOpen = false;
+  draggingTouchBtnId = null;
+  pendingSettingsButton = null;
+
+  state.board = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
+  state.buffer = Array.from({ length: BUFFER }, () => new Array(COLS).fill(null));
+  state.cur = null;
+  state.visualX = 0;
+  state.visualY = 0;
+  state.fallProgress = 0;
+  state.dropTrail = null;
+  state.hold = null;
+  state.canHold = true;
+  state.bag = [];
+  state.nextQueue = [];
+  state.score = 0;
+  state.lines = 0;
+  const effStart = secretSuperSpeedMode ? CONFIG.levelCap : startLevel;
+  state.startLevel = effStart;
+  state.level = effStart;
+  state.maxLevel = effStart;
+  state.initialLineGoal = lineGoal;
+  state.lineGoal = lineGoal;
+  state.zenRun = zenMode;
+  state.recordTimestamp = '';
+  state.recordSaved = false;
+  state.combo = -1;
+  state.b2b = false;
+  state.gravTimer = 0;
+  state.lockTimer = 0;
+  state.lockResets = 0;
+  state.lastMoveRotate = false;
+  state.lastKick = -1;
+  state.lowestY = 0;
+  state.countdown = CONFIG.countdown;
+  state.softDrop = false;
+  state.zone = 0;
+  state.zoneActive = false;
+  state.zoneFullCharge = false;
+  state.zoneTimer = 0;
+  state.zoneLines = 0;
+  state.victory = false;
+  state.time = 0;
+  state.gameOverTimer = 0;
+  state.flash = 0;
+  state.zoneFlash = 0;
+  state.toast = '';
+  state.toastTimer = 0;
+  dasDir = 0; dasTimer = 0; arrTimer = 0;
+  kb.left = kb.right = kb.down = false;
+  gpb.left = gpb.right = gpb.down = false;
+  touchHeld.left = touchHeld.right = touchHeld.down = false;
+  highScorePromptOpen = false;
+  closeTextInput();
+  ensureQueue();
+  state.phase = 'countdown';
+  spawn();
+}
+
+let lastTime = performance.now();
+function loop(now) {
+  const rawDt = (now - lastTime) / 1000;
+  lastTime = now;
+  if (rawDt > 0.0005 && rawDt < 0.25) {
+    fpsSmooth = fpsSmooth * 0.92 + (1 / rawDt) * 0.08;
+  }
+  const dt = Math.min(0.05, Math.max(0.0001, rawDt));
+
+  pollGamepad(dt);
+  update(dt);
+  render();
+
+  requestAnimationFrame(loop);
+}
+
+loadSettings();
+updateLayout();
+state.board = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
+state.buffer = Array.from({ length: BUFFER }, () => new Array(COLS).fill(null));
+ensureQueue();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
